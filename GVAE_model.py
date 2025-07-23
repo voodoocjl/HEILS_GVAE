@@ -173,7 +173,7 @@ def get_proj_mask(x, N, P):
 def is_valid_ops_adj(full_op, n_qubits):
     full_op = full_op.squeeze(0).cpu()
     violation = compute_sum(full_op, n_qubits)
-    if violation > 4:
+    if violation > 6:
         return False
     else:
         return True   
@@ -261,6 +261,13 @@ def normalize_adj(A):
     DAD = stacked_spmm(DA, D_out)
     return DAD
 
+def swap_ops(ops, p):
+        """
+        Swap the first p channels with the remaining ones along dim=2.
+        
+        """
+        return torch.cat([ops[:, :, p:], ops[:, :, :p]], dim=2)
+
 
 class GraphConvolution(nn.Module):
     def __init__(self, in_features, out_features, dropout=0., bias=True):
@@ -308,11 +315,12 @@ class GVAE(nn.Module):
             return eps.mul(std).add_(mu)
         else:
             return mu
-
-    def forward(self, ops, adj):
+        
+    def forward(self, ops, adj):     
         mu, logvar = self.encoder(ops, adj)
         z = self.reparameterize(mu, logvar)
         ops_recon, adj_recon = self.decoder(z)
+
         return ops_recon, adj_recon, mu, logvar
 
 class VAEncoder(nn.Module):
@@ -332,6 +340,7 @@ class VAEncoder(nn.Module):
     def forward(self, ops, adj):
         if self.normalize:
             adj = normalize_adj(adj)
+        ops = swap_ops(ops, 4)  # 4 is the category of the single gates
         x = ops
         for gc in self.gcs[:-1]:
             x = gc(x, adj)
@@ -355,6 +364,7 @@ class Decoder(nn.Module):
         embedding = F.dropout(embedding, p=self.dropout, training=self.training)
         ops = self.weight(embedding)
         adj = torch.matmul(embedding, embedding.permute(0, 2, 1))
+        ops = swap_ops(ops, ops.shape[-1]-4)  # Swap back the operations
         return self.activation_adj(ops), self.activation_adj(adj)
 
 class VAEReconstructed_Loss(object):

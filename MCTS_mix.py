@@ -5,9 +5,8 @@ import json
 import csv
 import numpy as np
 from sympy import true
-import torch
 from Node import Node, Color
-
+from prepare import *
 from schemes import Scheme, Scheme_eval
 from FusionModel import translator
 import datetime
@@ -17,8 +16,7 @@ from sampling import sampling_node
 import copy
 import torch.multiprocessing as mp
 from torch.multiprocessing import Manager
-from prepare import *
-from draw import plot_2d_array
+
 from Arguments import Arguments
 import argparse
 import torch.nn as nn
@@ -271,7 +269,7 @@ class MCTS:
     
     def Langevin_update(self, x, snr=10, n_steps=20, step_size=0.01):
         
-        x = self.ROOT.classifier.arch_to_z([x])
+        x, logvar = self.ROOT.classifier.arch_to_z([x])
         x_valid_list = []
 
         # Compute scaling factor c
@@ -279,15 +277,14 @@ class MCTS:
         decoder.eval()
         d = x.shape[2]  # Dimensionality
         c = self.compute_scaling_factor(x, decoder, snr, d)
-        n_qubit = self.ARCH_CODE[0] // self.fold
-        
+        n_qubit = self.ARCH_CODE[0] // self.fold        
         # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
 
         for i in range(1000):
             noise = torch.randn_like(x)
             step_size = c
-            x_new = x + step_size * noise
-            # x_new = noise * x
+            x_new = sample_normal(x, logvar,step_size)
+            # x_new = x + step_size * noise
             x_new = decoder(x_new)
             mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
             if is_valid_ops_adj(x_new[0], n_qubit):

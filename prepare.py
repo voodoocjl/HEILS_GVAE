@@ -1,4 +1,4 @@
-import pickle
+import torch
 import os
 import csv
 import pandas as pd  # 添加 pandas 库
@@ -69,5 +69,19 @@ def add_ppg_column(agent, csv_file):
     df['PPG'] = agent.performance_per_gate
     # 保存修改后的 CSV 文件
     df.to_csv(csv_file, index=False)
+
+def sample_normal(mu, logvar, step_size):
+    """
+    Sample from N(mu, exp(logvar)) using the reparameterization trick.
+    Args:
+        mu (torch.Tensor): Mean of the distribution.
+        logvar (torch.Tensor): Log-variance of the distribution.
+    Returns:
+        torch.Tensor: Sampled tensor.
+    """
+    std = torch.exp(logvar)
+    eps = torch.randn_like(std)
+    
+    return mu + eps * std * step_size
 
 

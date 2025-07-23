@@ -179,22 +179,32 @@ def pretrain(design, task, weight):
 
 
 if __name__ == '__main__':
-    single = None
-    enta = None
-    
-    arch_code = [10, 4]
-    n_layers = 4
-    n_qubits = 5
-    single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
-    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
+    task = {
+    'task': 'MNIST_10',
+    'option': 'mix_reg',
+    'n_qubits': 10,
+    'n_layers': 4,
+    'fold': 2
+    }
 
-    task = 'MNIST-10'
-    args = Arguments(task)
+    # task = {
+    # 'task': 'MNIST_4',
+    # 'option': 'mix_reg',
+    # 'n_qubits': 4,
+    # 'n_layers': 4,
+    # 'fold': 1
+    # }
+    
+    arch_code = [task['n_qubits'], task['n_layers']]
+    args = Arguments(**task)
+    n_layers = arch_code[1]
+    n_qubits = int(arch_code[0] / args.fold)
+    single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
+    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]    
     
     design = translator(single, enta, 'full', arch_code, args.fold)
     
-    # best_model, report = Scheme(design, 'MNIST', 'init', 30)
-    weight = torch.load('weights/init_weight_half_10')
-    report = pretrain(design, task, weight)  
+    best_model, report = Scheme(design, task, 'init', 1)
+    
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')

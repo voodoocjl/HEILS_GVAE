@@ -31,27 +31,39 @@ def evaluate_langevin_neighborhood(agent, arch, snr_values, task):
     results = {}
     weight = torch.load('init_weights/init_weight_MNIST_10')
     for snr in snr_values:
+        print("***"* 20)
+        print(f"\033[31mEvaluating SNR={snr}\033[0m")
         Arch = cir_to_matrix(arch[0], arch[1], arch_code, args.fold)
         arch_next = agent.Langevin_update(Arch, snr)
-        performances = []
-        for single, enta in arch_next[:5]:
-            print('single:', single, 'enta:', enta)
-            design = translator(single, enta, 'full', agent.ARCH_CODE, agent.fold)
-            # Evaluate using Scheme (set epochs as needed)
-            model, report = Scheme(design, task, weight, epochs=0)
-            performances.append(report['mae'])
-        mean_perf = np.mean(performances) if performances else None
-        results[snr] = mean_perf
+        if len(arch_next) <= 5:
+            print(f"Valid architectures {len(arch_next)} found for SNR={snr}. Skipping evaluation.")
+            results[snr] = None
+            continue
+        else:
+            arch_next = random.sample(arch_next, 5)  # Sample 5 architectures for evaluation
+            performances = []
+            difference = []
+            for single, enta in arch_next:
+                print('single:', single, 'enta:', enta)
+                # design = translator(single, enta, 'full', agent.ARCH_CODE, agent.fold)
+                # # Evaluate using Scheme (set epochs as needed)
+                # model, report = Scheme(design, task, weight, epochs=1)
+                # performances.append(report['mae'])
+                diff = difference_between_archs(arch[0], arch[1], single, enta)
+                difference.append(diff)
+                print('\033[33mDifference:\033[0m', diff)
+            # mean_perf = np.mean(performances) if performances else None
+            mean_perf = np.mean(difference, axis=0) if difference else None
+            results[snr] = mean_perf
     return results
 
-def sampling_qubits(search_space, qubits):
-    arch_list = []
-    while len(qubits) > 0:    
-        arch = random.sample(search_space, 1)
-        if arch[0][0] in qubits:
-            qubits.remove(arch[0][0])
-            arch_list.append(arch[0])
-    return arch_list
+def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
+    single_diff = sum(abs(np.array(a) - np.array(b)).sum() for a, b in zip(original_single, decoded_single))                    
+    enta_diff = sum((abs(np.array(a) - np.array(b)) != 0).sum() for a, b in zip(original_enta, decoded_enta))
+
+    return [single_diff, enta_diff]
+                
+
 
 if __name__ == "__main__":
     # Setup task and agent
@@ -81,7 +93,7 @@ if __name__ == "__main__":
     agent.task_name = task['task'] + '_' + task['option']
     agent.weight = 'init'  # Or load pretrained weights if available
 
-    snr_values = [0.01, 0.05, 0.1, 0.5]
+    snr_values = np.linspace(0.01, 0.1, 5)
     results_all = []
 
     for idx, arch in enumerate(initial_circuits):
@@ -91,10 +103,15 @@ if __name__ == "__main__":
         results_all.append(snr_results)
 
     # Print summary
-    print("\nMean performance for each SNR value across circuits:")
+    # print("\nMean performance for each SNR value across circuits:")
+    # for snr in snr_values:
+    #     mean_perf = np.mean([r[snr] for r in results_all if r[snr] is not None])
+    #     print(f"SNR={snr}: Mean MAE={mean_perf}")
+
+    print("\nMean differences for each SNR value across circuits:")
     for snr in snr_values:
-        mean_perf = np.mean([r[snr] for r in results_all if r[snr] is not None])
-        print(f"SNR={snr}: Mean MAE={mean_perf}")
+        mean_diff = [r[snr] for r in results_all if r[snr] is not None]
+        print(f"SNR={snr}: Mean Diff={mean_diff}")
 
     # Optionally, save results to CSV
     # import csv

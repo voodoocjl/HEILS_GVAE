@@ -102,7 +102,8 @@ class Classifier:
         if arch_code[0] == 4:
             checkpoint = torch.load('pretrained/model-circuits_4_qubits-6.pt', map_location=torch.device('cpu'))
         elif arch_code[0] == 10:
-            checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'))
+            # checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'))
+            checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'))
 
         input_dim = 4 + int(self.arch_code[0]/self.fold)
         self.GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
@@ -203,7 +204,7 @@ class Classifier:
         encoder = self.GVAE_model.encoder
         encoder.eval()
         mu, logvar = encoder(ops, adj)
-        return mu
+        return mu, logvar
     
     def predict(self, remaining, arch):
         assert type(remaining) == type({})
