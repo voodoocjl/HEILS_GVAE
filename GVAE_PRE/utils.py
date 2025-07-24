@@ -207,7 +207,7 @@ def get_val_acc_vae(model, cfg, X_adj, X_ops, indices):
         # preprocessing
         adj, ops, prep_reverse = preprocessing(adj, ops, **cfg['prep'])
         # forward
-        ops_recon, adj_recon,mu, logvar = model.forward(ops, adj)
+        ops_recon, adj_recon,mu, logvar, _, _ = model.forward(ops, adj, 5)
         # reverse preprocessing
         adj_recon, ops_recon = prep_reverse(adj_recon, ops_recon)
         adj, ops = prep_reverse(adj, ops)

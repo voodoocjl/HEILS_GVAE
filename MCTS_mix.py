@@ -26,7 +26,7 @@ class MCTS:
     def __init__(self, search_space, tree_height, fold, arch_code):
         assert type(search_space)    == type([])
         assert len(search_space)     >= 1
-        assert type(search_space[0]) == type([])
+        # assert type(search_space[0]) == type([])
 
         self.search_space   = search_space 
         self.ARCH_CODE      = arch_code

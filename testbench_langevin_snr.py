@@ -6,34 +6,37 @@ from schemes import Scheme
 from FusionModel import translator, cir_to_matrix
 from Arguments import Arguments
 import random
+import json
 
 # Load or define a set of initial circuits
 def load_initial_circuits(search_space_file, arch, num_circuits=5):
-    with open(search_space_file, 'rb') as f:
-        search_space = pickle.load(f)
-    
-    n_qubits, n_layers = arch
+    with open(search_space_file[0], 'rb') as f:
+        search_space_single = pickle.load(f)
+    with open(search_space_file[1], 'rb') as f:
+        search_space_enta = pickle.load(f)
 
-    single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
-    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
+    # single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
+    # enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
 
     circuit_list = []
     for _ in range(num_circuits):
-        circuit_list.append([single, enta])
-        # qubits = random.sample([i for i in range(1, n_qubit+1)],n_single)
-        # single = sampling_qubits(search_space_single, qubits)
+        
+        qubits = random.sample([i for i in range(1, n_qubit+1)],n_single)
+        single = sampling_qubits(search_space_single, qubits)
 
-        # qubits = random.sample([i for i in range(1, n_qubit+1)],n_enta)
-        # enta = sampling_qubits(search_space_enta, qubits)
+        qubits = random.sample([i for i in range(1, n_qubit+1)],n_enta)
+        enta = sampling_qubits(search_space_enta, qubits)
+        circuit_list.append([single, enta])
     return circuit_list
 
 def evaluate_langevin_neighborhood(agent, arch, snr_values, task):
     results = {}
-    weight = torch.load('init_weights/init_weight_MNIST_10')
+    weight = torch.load('init_weights/init_weight_MNIST_10', weights_only=True)
+    original_single, original_enta = arch['single'], arch['enta']
     for snr in snr_values:
         print("***"* 20)
         print(f"\033[31mEvaluating SNR={snr}\033[0m")
-        Arch = cir_to_matrix(arch[0], arch[1], arch_code, args.fold)
+        Arch = cir_to_matrix(original_single, original_enta, arch_code, args.fold)
         arch_next = agent.Langevin_update(Arch, snr)
         if len(arch_next) <= 5:
             print(f"Valid architectures {len(arch_next)} found for SNR={snr}. Skipping evaluation.")
@@ -49,7 +52,7 @@ def evaluate_langevin_neighborhood(agent, arch, snr_values, task):
                 # # Evaluate using Scheme (set epochs as needed)
                 # model, report = Scheme(design, task, weight, epochs=1)
                 # performances.append(report['mae'])
-                diff = difference_between_archs(arch[0], arch[1], single, enta)
+                diff = difference_between_archs(original_single, original_enta, single, enta)
                 difference.append(diff)
                 print('\033[33mDifference:\033[0m', diff)
             # mean_perf = np.mean(performances) if performances else None
@@ -88,16 +91,18 @@ if __name__ == "__main__":
     arch_code_fold = [task['n_qubits']//task['fold'], task['n_layers']]
     args = Arguments(**task)
     # Load search space and create agent
-    initial_circuits = load_initial_circuits('search_space/search_space_mnist_10', arch_code_fold, num_circuits=1)
+    # initial_circuits = load_initial_circuits([args.file_single, args.file_enta], arch_code_fold, num_circuits=1)
+    with open('data/random_circuits_mnist_5.json', 'r') as f:
+        initial_circuits = json.load(f)
     agent = MCTS(initial_circuits, tree_height=4, fold=task['fold'], arch_code=arch_code)
     agent.task_name = task['task'] + '_' + task['option']
     agent.weight = 'init'  # Or load pretrained weights if available
 
-    snr_values = np.linspace(0.01, 0.1, 5)
+    snr_values = np.linspace(1, 30, 5)
     results_all = []
 
-    for idx, arch in enumerate(initial_circuits):
-        print(f"Evaluating circuit {idx+1}/{len(initial_circuits)}")
+    for idx, arch in enumerate(initial_circuits[:100]):
+        print(f"\033[34mEvaluating circuit {idx+1}/{len(initial_circuits)}\033[0m")
         snr_results = evaluate_langevin_neighborhood(agent, arch, snr_values, task)
         print(f"Results for circuit {idx+1}: {snr_results}")
         results_all.append(snr_results)
@@ -110,7 +115,7 @@ if __name__ == "__main__":
 
     print("\nMean differences for each SNR value across circuits:")
     for snr in snr_values:
-        mean_diff = [r[snr] for r in results_all if r[snr] is not None]
+        mean_diff = np.mean([r[snr] for r in results_all if r[snr] is not None], axis=0)
         print(f"SNR={snr}: Mean Diff={mean_diff}")
 
     # Optionally, save results to CSV

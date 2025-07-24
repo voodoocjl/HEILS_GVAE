@@ -11,7 +11,8 @@ import json
 from torch import optim
 from configs import configs
 
-from GVAE_model import VAEReconstructed_Loss, GVAE
+# from GVAE_model import VAEReconstructed_Loss, GVAE
+from GVAE_model_Version7 import GVAE_Dual,  VAEReconstructed_Loss
 from utils import load_json, save_checkpoint_vae, preprocessing
 from utils import get_val_acc_vae, is_valid_ops_adj, generate_single_enta, compute_sum
 from GVAE_translator import get_gate_and_adj_matrix, generate_circuits
@@ -40,16 +41,19 @@ def pretraining_model(dataset, cfg, args):
     X_adj_val, X_ops_val, indices_val = _build_dataset(dataset, val_ind_list)
     # model = Model(input_dim=args.input_dim, hidden_dim=args.hidden_dim, latent_dim=args.dim,
     #                num_hops=args.hops, num_mlp_layers=args.mlps, dropout=args.dropout, **cfg['GAE']).cuda()
-    model = GVAE((args.input_dim, 32, 64, 128, 64, 32, args.dim), normalize=True, dropout=args.dropout, **cfg['GAE']).cuda()
+    model = GVAE_Dual((args.input_dim, 32, 64, 128, 64, 32, args.dim), normalize=True, dropout=args.dropout, **cfg['GAE']).cuda()
     optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08)
     epochs = args.epochs
     bs = args.bs
     loss_total = []
+    
+    # Initialize loss function once
+    loss_fn = VAEReconstructed_Loss(**cfg['loss'])
 
     # Load pretrained model if available
-    checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'))
-    model.load_state_dict(checkpoint['model_state'])
-    optimizer.load_state_dict(checkpoint['optimizer_state'])
+    # checkpoint = torch.load('pretrained/dim-16/model-circuits_5_qubits-9.pt', map_location=torch.device('cpu'))
+    # model.load_state_dict(checkpoint['model_state'])
+    # optimizer.load_state_dict(checkpoint['optimizer_state'])
 
     with open('data/random_circuits_mnist_5.json', 'r') as f:
         test_circuits = json.load(f)
@@ -83,12 +87,12 @@ def pretraining_model(dataset, cfg, args):
             # preprocessing
             adj, ops, prep_reverse = preprocessing(adj, ops, **cfg['prep'])
             # forward
-            ops_recon, adj_recon, mu, logvar = model(ops, adj)
-            Z.append(mu)
+            ops_recon, adj_recon, mu_1, logvar_1, mu_2, logvar_2 = model(ops, adj, arch_code[0])
+            Z.append(mu_1)
             adj_recon, ops_recon = prep_reverse(adj_recon, ops_recon)
             adj, ops = prep_reverse(adj, ops)
-            loss = VAEReconstructed_Loss(**cfg['loss'])((ops_recon, adj_recon), (ops, adj), mu, logvar) # With KL
-            # loss = Reconstructed_Loss(**cfg['loss'])((ops_recon, adj_recon), (ops, adj)) # Without KL
+            loss = loss_fn((ops_recon, adj_recon), (ops, adj), mu_1, logvar_1, mu_2, logvar_2) # With KL
+            
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 5)
             optimizer.step()
@@ -168,7 +172,7 @@ def evaluate_test_circuits(model, test_circuits):
             )
             
             # Forward pass through model
-            ops_recon, adj_recon, _, _ = model(ops_prep, adj_prep)
+            ops_recon, adj_recon, _, _ ,_,_= model(ops_prep, adj_prep, arch_code[0])
             
             if is_valid_ops_adj(ops_recon, arch_code[0], 4):
                 # Convert decoded operations to single and enta coding
@@ -227,13 +231,13 @@ if __name__ == '__main__':
 
     arch_code = [5, 4]
     args = parser.parse_args()
-    # args.epochs = 100
+    
     
     args.data = f'data/data_{arch_code[0]}_qubits.json'
     args.name = f'circuits_{arch_code[0]}_qubits'
     args.input_dim = arch_code[0] + 4  # 4 single gates
     args.n_qubits = arch_code[0]
-    args.epochs = 10
+    args.epochs = 50
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

@@ -326,4 +326,4 @@ if __name__ == '__main__':
     # print("adj_matrx: \n", adj_matrix)
     # fig, ax = qml.draw_mpl(circuit_qnode)(circuits[0])
     # plt.show()
-    data_dumper(circuit_manager, f_name=f"data_{task['n_qubits']}_qubits.json")
+    data_dumper(circuit_manager, f_name=f"data_{task['n_qubits']}_qubits_1000.json")

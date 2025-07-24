@@ -13,24 +13,6 @@ def transform_operations(max_idx):
         ops.append(transform_dict[idx.item()])
     return ops
 
-# def generate_single_enta(op_results, n_qubits):
-#     n_layers = int(len(op_results) / (2 * n_qubits))
-#     single=[[i]+[-1]*2*n_layers for i in range(1,1+n_qubits)]
-#     enta=[[i]+[-1]*n_layers for i in range(1,1+n_qubits)]
-#     for i in range(0,len(op_results),2*n_qubits):
-#         for j in range(0, n_qubits):
-#             op = op_results[i + j]
-#             if (len(op[-1]) == 1):
-#                 col=int(i / n_layers)
-#                 row=op[-1][0]
-#                 single[row][1+col]= int('data' in op_results[i+j])
-#                 single[row][2+col]=int('U3' in op_results[i+j])
-#         for j in range(n_qubits, 2*n_qubits):
-#             op = op_results[i + j]
-#             if len(op[-1])==2 and 'C(U3)' in op:
-#                 row,num=op[-1]
-#                 col=int(i/(n_layers*2))
-#                 enta[row][1+col]=num+1
 def generate_single_enta(gate_matrix, n_qubit):
 
     gate_matrix = gate_matrix.squeeze(0).cpu().detach().numpy()
@@ -340,7 +322,7 @@ class VAEncoder(nn.Module):
     def forward(self, ops, adj):
         if self.normalize:
             adj = normalize_adj(adj)
-        ops = swap_ops(ops, 4)  # 4 is the category of the single gates
+        # ops = swap_ops(ops, 4)  # 4 is the category of the single gates
         x = ops
         for gc in self.gcs[:-1]:
             x = gc(x, adj)
@@ -364,7 +346,7 @@ class Decoder(nn.Module):
         embedding = F.dropout(embedding, p=self.dropout, training=self.training)
         ops = self.weight(embedding)
         adj = torch.matmul(embedding, embedding.permute(0, 2, 1))
-        ops = swap_ops(ops, ops.shape[-1]-4)  # Swap back the operations
+        # ops = swap_ops(ops, ops.shape[-1]-4)  # Swap back the operations
         return self.activation_adj(ops), self.activation_adj(adj)
 
 class VAEReconstructed_Loss(object):

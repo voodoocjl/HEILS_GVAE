@@ -82,6 +82,7 @@ def sample_normal(mu, logvar, step_size):
     std = torch.exp(logvar)
     eps = torch.randn_like(std)
     
-    return mu + eps * std * step_size
+    # return mu + eps * std * step_size
+    return mu + eps * step_size
 
 
