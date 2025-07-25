@@ -12,7 +12,7 @@ from torch import optim
 from configs import configs
 
 # from GVAE_model import VAEReconstructed_Loss, GVAE
-from GVAE_model_Version7 import GVAE_Dual,  VAEReconstructed_Loss
+from GVAE_model_Version7 import GVAE_Dual, VAEReconstructed_Loss, reduce_dimension
 from utils import load_json, save_checkpoint_vae, preprocessing
 from utils import get_val_acc_vae, is_valid_ops_adj, generate_single_enta, compute_sum
 from GVAE_translator import get_gate_and_adj_matrix, generate_circuits
@@ -43,6 +43,7 @@ def pretraining_model(dataset, cfg, args):
     #                num_hops=args.hops, num_mlp_layers=args.mlps, dropout=args.dropout, **cfg['GAE']).cuda()
     model = GVAE_Dual((args.input_dim, 32, 64, 128, 64, 32, args.dim), normalize=True, dropout=args.dropout, **cfg['GAE']).cuda()
     optimizer = optim.Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.8, patience=3, verbose=True)
     epochs = args.epochs
     bs = args.bs
     loss_total = []
@@ -50,8 +51,8 @@ def pretraining_model(dataset, cfg, args):
     # Initialize loss function once
     loss_fn = VAEReconstructed_Loss(**cfg['loss'])
 
-    # Load pretrained model if available
-    # checkpoint = torch.load('pretrained/dim-16/model-circuits_5_qubits-9.pt', map_location=torch.device('cpu'))
+    # # Load pretrained model if available
+    # checkpoint = torch.load('pretrained/dim-16/model-circuits_5_qubits-49.pt', map_location=torch.device('cpu'))
     # model.load_state_dict(checkpoint['model_state'])
     # optimizer.load_state_dict(checkpoint['optimizer_state'])
 
@@ -91,6 +92,11 @@ def pretraining_model(dataset, cfg, args):
             Z.append(mu_1)
             adj_recon, ops_recon = prep_reverse(adj_recon, ops_recon)
             adj, ops = prep_reverse(adj, ops)
+            
+            # Calculate detailed loss components for monitoring
+            ops_loss = cfg['loss']['loss_ops'](ops_recon, ops) if hasattr(cfg['loss']['loss_ops'], '__call__') else nn.MSELoss()(ops_recon, ops)
+            adj_loss = cfg['loss']['loss_adj'](adj_recon, adj) if hasattr(cfg['loss']['loss_adj'], '__call__') else nn.MSELoss()(adj_recon, adj)
+            
             loss = loss_fn((ops_recon, adj_recon), (ops, adj), mu_1, logvar_1, mu_2, logvar_2) # With KL
             
             loss.backward()
@@ -98,7 +104,8 @@ def pretraining_model(dataset, cfg, args):
             optimizer.step()
             loss_epoch.append(loss.item())
             if i%400 == 0:
-                print('epoch {}: batch {} / {}: loss: {:.5f}'.format(epoch, i, chunks, loss.item()))
+                print('epoch {}: batch {} / {}: total_loss: {:.5f}, ops_loss: {:.5f}, adj_loss: {:.5f}'.format(
+                    epoch, i, chunks, loss.item(), ops_loss.item(), adj_loss.item()))
         Z = torch.cat(Z, dim=0)       
 
         # Test circuit comparison
@@ -107,9 +114,15 @@ def pretraining_model(dataset, cfg, args):
         acc_ops_val, mean_corr_adj_val, mean_fal_pos_adj_val, acc_adj_val = get_val_acc_vae(model, cfg, X_adj_val, X_ops_val, indices_val)
         print('validation set: acc_ops:{0:.4f}, mean_corr_adj:{1:.4f}, mean_fal_pos_adj:{2:.4f}, acc_adj:{3:.4f}'.format(
                 acc_ops_val, mean_corr_adj_val, mean_fal_pos_adj_val, acc_adj_val))
-        print('epoch {}: average loss {:.5f}'.format(epoch, sum(loss_epoch)/len(loss_epoch)))
-        loss_total.append(sum(loss_epoch) / len(loss_epoch))
-        save_checkpoint_vae(model, optimizer, epoch, sum(loss_epoch) / len(loss_epoch), args.dim, args.name, args.dropout, args.seed)
+        
+        epoch_loss = sum(loss_epoch)/len(loss_epoch)
+        print('epoch {}: average loss {:.5f}'.format(epoch, epoch_loss))
+        loss_total.append(epoch_loss)
+        
+        # Step the scheduler
+        scheduler.step(epoch_loss)
+        
+        save_checkpoint_vae(model, optimizer, epoch, epoch_loss, args.dim, args.name, args.dropout, args.seed)
 
     print('loss for epochs: \n', loss_total)
 
@@ -215,8 +228,8 @@ if __name__ == '__main__':
                         help='batch size (default: 32)')
     parser.add_argument('--epochs', type=int, default=16,
                         help='training epochs (default: 16)')
-    parser.add_argument('--dropout', type=float, default=0.3,
-                        help='decoder implicit regularization (default: 0.3)')
+    parser.add_argument('--dropout', type=float, default=0.1,
+                        help='decoder implicit regularization (default: 0.1)')
     parser.add_argument('--normalize', action='store_true', default=True,
                         help='use input normalization')
     # parser.add_argument('--input_dim', type=int, default=2+len(vc.allowed_gates)+vc.num_qubits)
@@ -237,7 +250,7 @@ if __name__ == '__main__':
     args.name = f'circuits_{arch_code[0]}_qubits'
     args.input_dim = arch_code[0] + 4  # 4 single gates
     args.n_qubits = arch_code[0]
-    args.epochs = 50
+    args.epochs = 20
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

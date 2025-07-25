@@ -204,3 +204,4 @@ circuit_plots/
 .vscode/
 data/
 pretrained/
+GVAE_PRE/pretraining copy.py

@@ -1,7 +1,7 @@
 import os
 import json
 import torch
-import var_config as vc
+import GVAE_PRE.var_config as vc 
 import torch.nn.functional as F
 import numpy as np
 
@@ -395,4 +395,63 @@ def is_valid_ops_adj(full_op, n_qubits, threshold=4):
     if violation > threshold:
         return False
     else:
-        return True 
+        return True
+    
+def compute_scaling_factor(x, decoder, snr_target, d):
+            """
+            Compute the scaling factor c based on the given formula.
+            
+            Args:
+                x (torch.Tensor): Input tensor.
+                decoder (nn.Module): Decoder model.
+                snr_target (float): Target signal-to-noise ratio.
+                d (int): Dimensionality of the input.
+
+            Returns:
+                float: Scaling factor c.
+            """
+            # Step 1: Compute y = decoder(x)
+            x.requires_grad_(True)  # Enable gradient computation for x
+            y = decoder(x)
+            y = y[0]
+            # Step 2: Compute ||y||^2 (mean squared norm of y)
+            y_norm_squared = torch.mean(torch.norm(y, dim=-1) ** 2)
+            
+            # Step 3: Compute Jacobian J of the decoder
+            J = []
+            for i in range(y.shape[2]):  # Iterate over output dimensions
+                grad_outputs = torch.zeros_like(y)
+                grad_outputs[:, i] = 1.0  # One-hot vector for each output dimension
+                J_i = torch.autograd.grad(y, x, grad_outputs=grad_outputs, retain_graph=True, create_graph=True)[0]
+                J.append(J_i)
+            J = torch.stack(J, dim=1)  # Stack Jacobian components
+            
+            # Step 4: Compute ||J||_2^2 (Frobenius norm squared of the Jacobian)
+            J_norm_squared = torch.sum(J ** 2)
+            
+            # Step 5: Compute scaling factor c
+            x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
+            c = torch.sqrt(y_norm_squared / (snr_target * d * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
+        
+            return c.item()
+
+from GVAE_translator import generate_circuits, get_gate_and_adj_matrix
+from configs import configs
+
+def arch_to_z(archs, arch_code_fold, encoder):
+        # Convert arch matrix to latent space representations
+        adj_list, op_list = [], []
+        for net in archs:
+            circuit_ops = generate_circuits(net, arch_code_fold)
+            _, gate_matrix, adj_matrix = get_gate_and_adj_matrix(circuit_ops, arch_code_fold)
+            ops = torch.tensor(gate_matrix, dtype=torch.float32).unsqueeze(0)
+            adj = torch.tensor(adj_matrix, dtype=torch.float32).unsqueeze(0)
+            adj_list.append(adj)
+            op_list.append(ops)
+
+        adj = torch.cat(adj_list, dim=0)
+        ops = torch.cat(op_list, dim=0)
+        adj, ops, prep_reverse = preprocessing(adj, ops, **configs[4]['prep'])
+        encoder.eval()
+        mu, logvar = encoder(ops, adj)
+        return mu, logvar

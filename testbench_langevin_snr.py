@@ -1,35 +1,57 @@
 import pickle
 import numpy as np
 import torch
-from MCTS_mix import MCTS
+
 from schemes import Scheme
 from FusionModel import translator, cir_to_matrix
 from Arguments import Arguments
 import random
 import json
+from GVAE_PRE.gen_random_circuits import generate_random_circuits
+from GVAE_PRE.utils import get_proj_mask, is_valid_ops_adj, generate_single_enta, compute_scaling_factor, arch_to_z
+from GVAE_model import GVAE
+from configs import configs
 
-# Load or define a set of initial circuits
-def load_initial_circuits(search_space_file, arch, num_circuits=5):
-    with open(search_space_file[0], 'rb') as f:
-        search_space_single = pickle.load(f)
-    with open(search_space_file[1], 'rb') as f:
-        search_space_enta = pickle.load(f)
 
-    # single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
-    # enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
-
-    circuit_list = []
-    for _ in range(num_circuits):
+def Langevin_update(x, model, snr=10, step_size=0.01):
         
-        qubits = random.sample([i for i in range(1, n_qubit+1)],n_single)
-        single = sampling_qubits(search_space_single, qubits)
+        x, logvar = arch_to_z([x], arch_code_fold, model.encoder)
+        x_valid_list = []
 
-        qubits = random.sample([i for i in range(1, n_qubit+1)],n_enta)
-        enta = sampling_qubits(search_space_enta, qubits)
-        circuit_list.append([single, enta])
-    return circuit_list
+        # Compute scaling factor c
+        decoder = model.decoder
+        decoder.eval()
+        d = x.shape[2]  # Dimensionality
+        c = compute_scaling_factor(x, decoder, snr, d)
+        n_qubit = arch_code_fold[0]        
+        # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
 
-def evaluate_langevin_neighborhood(agent, arch, snr_values, task):
+        for i in range(1000):
+            noise = torch.randn_like(x)
+            step_size = c
+            x_new = sample_normal(x, logvar,step_size)
+            # x_new = x + step_size * noise
+            x_new = decoder(x_new)
+            mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+            if is_valid_ops_adj(x_new[0], n_qubit):
+                gate_matrix = x_new[0] + mask
+                single,enta, _ = generate_single_enta(gate_matrix, n_qubit)
+                if [single, enta] not in x_valid_list:
+                    x_valid_list.append([single, enta])
+        print('Number of valid ciruicts:', len(x_valid_list))
+        return x_valid_list
+
+def sample_normal(mu, logvar, step_size):
+    """
+    Sample from N(mu, exp(logvar)) using the reparameterization trick.   
+    """
+    std = torch.exp(logvar)
+    eps = torch.randn_like(std)
+    
+    # return mu + eps * std * step_size
+    return mu + eps * step_size
+
+def evaluate_langevin_neighborhood(arch, snr_values, task):
     results = {}
     weight = torch.load('init_weights/init_weight_MNIST_10', weights_only=True)
     original_single, original_enta = arch['single'], arch['enta']
@@ -37,7 +59,7 @@ def evaluate_langevin_neighborhood(agent, arch, snr_values, task):
         print("***"* 20)
         print(f"\033[31mEvaluating SNR={snr}\033[0m")
         Arch = cir_to_matrix(original_single, original_enta, arch_code, args.fold)
-        arch_next = agent.Langevin_update(Arch, snr)
+        arch_next = Langevin_update(Arch, GVAE_model, snr)
         if len(arch_next) <= 5:
             print(f"Valid architectures {len(arch_next)} found for SNR={snr}. Skipping evaluation.")
             results[snr] = None
@@ -90,20 +112,31 @@ if __name__ == "__main__":
     arch_code = [task['n_qubits'], task['n_layers']]
     arch_code_fold = [task['n_qubits']//task['fold'], task['n_layers']]
     args = Arguments(**task)
-    # Load search space and create agent
-    # initial_circuits = load_initial_circuits([args.file_single, args.file_enta], arch_code_fold, num_circuits=1)
-    with open('data/random_circuits_mnist_5.json', 'r') as f:
-        initial_circuits = json.load(f)
-    agent = MCTS(initial_circuits, tree_height=4, fold=task['fold'], arch_code=arch_code)
-    agent.task_name = task['task'] + '_' + task['option']
-    agent.weight = 'init'  # Or load pretrained weights if available
+    n_qubits, n_layers = arch_code_fold
 
-    snr_values = np.linspace(1, 30, 5)
+    # Load search space and create agent
+    initial_circuits = generate_random_circuits(10, n_qubits, args.file_single, args.file_enta)
+
+    single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
+    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
+    initial_circuits = [{'single': single, 'enta': enta}]
+
+    # with open('data/random_circuits_mnist_5.json', 'r') as f:
+    #     initial_circuits = json.load(f)    
+
+    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
+    checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
+
+    input_dim = 4 + arch_code_fold[0]
+    GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
+    GVAE_model.load_state_dict(checkpoint['model_state'])
+
+    snr_values = np.linspace(0.01, 1, 10)
     results_all = []
 
-    for idx, arch in enumerate(initial_circuits[:100]):
+    for idx, arch in enumerate(initial_circuits[:10]):
         print(f"\033[34mEvaluating circuit {idx+1}/{len(initial_circuits)}\033[0m")
-        snr_results = evaluate_langevin_neighborhood(agent, arch, snr_values, task)
+        snr_results = evaluate_langevin_neighborhood(arch, snr_values, task)
         print(f"Results for circuit {idx+1}: {snr_results}")
         results_all.append(snr_results)
 
