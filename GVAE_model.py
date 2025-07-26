@@ -322,7 +322,7 @@ class VAEncoder(nn.Module):
     def forward(self, ops, adj):
         if self.normalize:
             adj = normalize_adj(adj)
-        ops = swap_ops(ops, 4)  # 4 is the category of the single gates
+        # ops = swap_ops(ops, 4)  # 4 is the category of the single gates
         x = ops
         for gc in self.gcs[:-1]:
             x = gc(x, adj)
@@ -346,7 +346,7 @@ class Decoder(nn.Module):
         embedding = F.dropout(embedding, p=self.dropout, training=self.training)
         ops = self.weight(embedding)
         adj = torch.matmul(embedding, embedding.permute(0, 2, 1))
-        ops = swap_ops(ops, ops.shape[-1]-4)  # Swap back the operations
+        # ops = swap_ops(ops, ops.shape[-1]-4)  # Swap back the operations
         return self.activation_adj(ops), self.activation_adj(adj)
 
 class VAEReconstructed_Loss(object):

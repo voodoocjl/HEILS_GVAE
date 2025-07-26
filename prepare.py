@@ -2,6 +2,7 @@ import torch
 import os
 import csv
 import pandas as pd  # 添加 pandas 库
+import numpy as np
 
 def check_file(task):
     if os.path.exists('results') == False:
@@ -16,7 +17,7 @@ def check_file(task):
     if os.path.isfile(result_fine) == False:
         with open(result_fine, 'w+', newline='') as res:
             writer = csv.writer(res)
-            writer.writerow(['iteration', 'arch_code', 'ACC', 'PPG'])
+            writer.writerow(['iteration', 'arch_code', 'ACC', 'PPG', 'Mean_Diff'])
 
 def check_file_with_prefix(path, prefix):
     files = os.listdir(path)
@@ -84,5 +85,11 @@ def sample_normal(mu, logvar, step_size):
     
     # return mu + eps * std * step_size
     return mu + eps * step_size
+
+def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
+    single_diff = sum(abs(np.array(a) - np.array(b)).sum() for a, b in zip(original_single, decoded_single))                    
+    enta_diff = sum((abs(np.array(a) - np.array(b)) != 0).sum() for a, b in zip(original_enta, decoded_enta))
+
+    return [single_diff, enta_diff]
 
 

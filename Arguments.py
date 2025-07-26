@@ -31,7 +31,7 @@ class Arguments:
         self.kernel      = 6
         self.fold        = fold
         self.init_weight = 'init_weight_'+ task
-        self.SNR = 1
+        self.SNR = 0.5
         self.strategy = 'mix'
 
 

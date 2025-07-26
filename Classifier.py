@@ -123,7 +123,7 @@ class Classifier:
                 nets_maeinv.append(v)
             # self.nets = torch.from_numpy(np.asarray(sampled_nets, dtype=np.float32))
             # self.nets = normalize(self.nets)
-            self.nets = self.arch_to_z(sampled_nets)
+            self.nets, _ = self.arch_to_z(sampled_nets)
             self.maeinv = torch.from_numpy(np.asarray(nets_maeinv, dtype=np.float32).reshape(-1, 1))
             self.labels = get_label(self.maeinv, tree_height)
             if torch.cuda.is_available():
@@ -224,7 +224,7 @@ class Classifier:
                 net = cir_to_matrix(net[0], net[1], self.arch_code, self.fold)
             remaining_archs.append(net)
 
-        remaining_archs = self.arch_to_z(remaining_archs)
+        remaining_archs, _ = self.arch_to_z(remaining_archs)
         
         # remaining_archs = torch.from_numpy(np.asarray(remaining_archs, dtype=np.float32))
         # remaining_archs = normalize(remaining_archs)        

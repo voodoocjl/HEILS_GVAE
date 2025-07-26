@@ -79,6 +79,7 @@ class MCTS:
         self.period = 1
         self.fold = fold
         self.performance_per_gate = []
+        self.mean_diff = []
 
     def init_train(self, numbers=50):
         
@@ -133,6 +134,11 @@ class MCTS:
             self.explorations['single'] = single
             self.explorations['enta'] = enta
             qubits = []
+
+        # sorted by the first element
+        self.explorations['single'] = sorted(self.explorations['single'], key=lambda x: x[0])
+        self.explorations['enta'] = sorted(self.explorations['enta'], key=lambda x: x[0])
+
         best_arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)
         # plot_2d_array(arch)
         design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
@@ -142,7 +148,7 @@ class MCTS:
             print('Test ACC: ', report['mae'])
         else:
             if debug:
-                epochs = 1
+                epochs = 0
             best_model, report = Scheme(design, task, strategy, epochs)
             current_time = datetime.datetime.now()
             formatted_time = current_time.strftime('%m-%d-%H')
@@ -156,7 +162,7 @@ class MCTS:
             metrics = report['mae']
             if not explicit:
                 best_change_full = best_change
-            writer.writerow([self.ITERATION, best_change_full, metrics, self.performance_per_gate[-1]])
+            writer.writerow([self.ITERATION, best_change_full, metrics, self.performance_per_gate[-1], self.mean_diff[-1]])
         
         if qubits != []:
             self.history.append(qubits)
@@ -381,34 +387,37 @@ class MCTS:
     def sampling_arch(self, number=10):
         print('Used Qubits:', self.qubit_used)
         h = 2 ** (self.tree_height-1) - 1
-        for i in range(0, number):
-            # select
-            target_bin   = self.select()           
-            qubits = self.qubit_used
-            sampled_arch = target_bin.sample_arch(qubits)
-            # NOTED: the sampled arch can be None 
-            if sampled_arch is not None:                    
-                # push the arch into task queue                
-                self.TASK_QUEUE.append(sampled_arch)                    
-                self.sample_nodes.append(target_bin.id-h)
-            else:
-                # trail 1: pick a network from the left leaf
-                for n in self.nodes:
-                    if n.is_leaf == True:
-                        sampled_arch = n.sample_arch(qubits)
-                        if sampled_arch is not None:
-                            # print("\nselected node" + str(n.id-7) + " in leaf layer")                            
-                            self.TASK_QUEUE.append(sampled_arch)                                
-                            self.sample_nodes.append(n.id-h)
-                            break
-                        else:
-                            continue
-            # if type(sampled_arch[0]) == type([]):
-            if get_list_dimensions(sampled_arch) == 2:
-                arch = sampled_arch[-1]
-            else:
-                arch = sampled_arch
-            self.search_space.remove(arch)        
+        if len(self.search_space) <= number:
+            self.TASK_QUEUE += self.search_space
+        else:
+            for i in range(0, number):
+                # select
+                target_bin   = self.select()
+                qubits = self.qubit_used
+                sampled_arch = target_bin.sample_arch(qubits)
+                # NOTED: the sampled arch can be None 
+                if sampled_arch is not None:                    
+                    # push the arch into task queue                
+                    self.TASK_QUEUE.append(sampled_arch)                    
+                    self.sample_nodes.append(target_bin.id-h)
+                else:
+                    # trail 1: pick a network from the left leaf
+                    for n in self.nodes:
+                        if n.is_leaf == True:
+                            sampled_arch = n.sample_arch(qubits)
+                            if sampled_arch is not None:
+                                # print("\nselected node" + str(n.id-7) + " in leaf layer")                            
+                                self.TASK_QUEUE.append(sampled_arch)                                
+                                self.sample_nodes.append(n.id-h)
+                                break
+                            else:
+                                continue
+                # if type(sampled_arch[0]) == type([]):
+                if get_list_dimensions(sampled_arch) == 2:
+                    arch = sampled_arch[-1]
+                else:
+                    arch = sampled_arch
+                self.search_space.remove(arch)        
 
     def insert_job(self, change_code, job_input):
         job = copy.deepcopy(job_input)
@@ -429,30 +438,43 @@ class MCTS:
         designs =[]        
         archs = []
         nodes = []
+        difference = []
+        original_single = self.explorations['single']
+        original_enta = self.explorations['enta']
         while len(self.TASK_QUEUE) > 0:            
            
             job = self.TASK_QUEUE.pop()
-            sample_node = self.sample_nodes.pop()
+            try:
+                sample_node = self.sample_nodes.pop()
+            except IndexError:
+                sample_node = None
             if type(job[0]) != type([]):
                 job = [job]            
             # if self.explorations['phase'] == 0:
             if get_list_dimensions(job) < 3:
-                if len(job[0]) == len(self.explorations['single'][0]):
-                    single = self.insert_job(self.explorations['single'], job)
-                    enta = self.explorations['enta']
+                if len(job[0]) == len(original_single[0]):
+                    single = self.insert_job(original_single, job)
+                    enta = original_enta
                 else:
-                    single = self.explorations['single']
-                    enta = self.insert_job(self.explorations['enta'], job)
+                    single = original_single
+                    enta = self.insert_job(original_enta, job)
             else:
                 single = job[0]
                 enta = job[1]
+
+                diff = difference_between_archs(original_single, original_enta, single, enta)
+                difference.append(diff)
             design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
-            arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)
-            
+            arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)            
+
             jobs.append(job)
             designs.append(design)
             archs.append(arch)
             nodes.append(sample_node)
+
+        mean_diff = np.mean(difference, axis=0) if difference else None
+        print(f"\nMean differences for {len(difference)} circuits: {mean_diff}")
+        self.mean_diff.append(mean_diff)        
 
         return jobs, designs, archs, nodes
 
@@ -725,7 +747,7 @@ if __name__ == '__main__':
     args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION
-    debug = False
+    debug = True
     regular = task.get('regular', False)
 
 
