@@ -104,9 +104,9 @@ class Classifier:
         elif arch_code[0] == 10:
             checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
             # checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
-
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         input_dim = 4 + int(self.arch_code[0]/self.fold)
-        self.GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
+        self.GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE']).to(device)
         self.GVAE_model.load_state_dict(checkpoint['model_state'])
         
 
