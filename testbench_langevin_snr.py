@@ -102,6 +102,15 @@ def difference_between_archs(original_single, original_enta, decoded_single, dec
 
 if __name__ == "__main__":
     # Setup task and agent
+    task = {
+        'task': 'MNIST_4',
+        'option': 'mix_reg',
+        'regular': True,
+        'n_qubits': 4,
+        'n_layers': 4,
+        'fold': 1
+    }
+
     # task = {
     #     'task': 'MNIST_10',
     #     'option': 'mix_reg',
@@ -110,15 +119,6 @@ if __name__ == "__main__":
     #     'n_layers': 4,
     #     'fold': 2
     # }
-
-    task = {
-        'task': 'MNIST_10',
-        'option': 'mix_reg',
-        'regular': True,
-        'n_qubits': 10,
-        'n_layers': 4,
-        'fold': 2
-    }
     arch_code = [task['n_qubits'], task['n_layers']]
     arch_code_fold = [task['n_qubits']//task['fold'], task['n_layers']]
     args = Arguments(**task)
@@ -134,14 +134,16 @@ if __name__ == "__main__":
     # with open('data/random_circuits_mnist_5.json', 'r') as f:
     #     initial_circuits = json.load(f)    
 
-    checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
+    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
     # checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
+    checkpoint = torch.load('pretrained/dim-16/model-circuits_4_qubits-19.pt', map_location=torch.device('cpu'), weights_only=True)
+
 
     input_dim = 4 + arch_code_fold[0]
     GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
     GVAE_model.load_state_dict(checkpoint['model_state'])
 
-    snr_values = np.linspace([0.1, 1], [1, 10], 10)
+    snr_values = np.linspace([0.1, 0.1], [1, 1], 10)
     results_all = []
 
     for idx, arch in enumerate(initial_circuits[:1]):

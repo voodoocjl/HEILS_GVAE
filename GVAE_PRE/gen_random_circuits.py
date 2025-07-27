@@ -32,20 +32,19 @@ def generate_random_circuits(num_circuits, num_qubits, search_space_single, sear
 
 if __name__ == '__main__':
     task = 'mnist'
-    search_space_single = f'search_space/search_space_{task}_{5}_single'
-    search_space_enta = f'search_space/search_space_{task}_{5}_enta'
+    search_space_single = f'search_space/search_space_{task}_single'
+    search_space_enta = f'search_space/search_space_{task}_enta'
 
     n_circuits = 1000
-    n_qubits = 5
+    n_qubits = 4
     circuits_list = generate_random_circuits(n_circuits, n_qubits, search_space_single, search_space_enta)
 
     import json
 
-    with open(f'data/random_circuits_{task}_5.json', 'w') as f:
+    with open(f'data/random_circuits_{task}_{n_qubits}.json', 'w') as f:
         json.dump(circuits_list, f)
 
-    with open(f'data/random_circuits_{task}_5.json', 'r') as f:
+    with open(f'data/random_circuits_{task}_{n_qubits}.json', 'r') as f:
         data = json.load(f)
-        
 
-    print(f"Generated {len(data)} random circuits for task {task} with 5 qubits.")
+    print(f"Generated {len(data)} random circuits for task {task} with {n_qubits} qubits.")

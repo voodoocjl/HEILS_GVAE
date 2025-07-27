@@ -175,13 +175,10 @@ class MCTS:
         arch_last = single + enta
 
         samples = 20
+        with open(os.path.join('search_space', f'search_space_mnist_{arch_code[0]}'), 'rb') as file:
+                self.search_space = pickle.load(file)
         if args.strategy == 'mix':
-            samples = 10
-            with open(os.path.join('search_space', 'search_space_mnist_10'), 'rb') as file:
-                self.search_space = pickle.load(file)
-        elif args.strategy == 'explicit':
-            with open('search_space/search_space_mnist_4', 'rb') as file:       
-                self.search_space = pickle.load(file)
+            samples = 10 
         
         if args.strategy in ['explicit', 'mix']:
             # remove last configuration
@@ -956,14 +953,14 @@ if __name__ == '__main__':
     'fold': 1
     }
 
-    task = {
-    'task': 'MNIST_10',
-    'option': 'mix_reg',
-    'regular': True,
-    'n_qubits': 10,
-    'n_layers': 4,
-    'fold': 2
-    }
+    # task = {
+    # 'task': 'MNIST_10',
+    # 'option': 'mix_reg',
+    # 'regular': True,
+    # 'n_qubits': 10,
+    # 'n_layers': 4,
+    # 'fold': 2
+    # }
 
     mp.set_start_method('spawn')
 
@@ -978,7 +975,7 @@ if __name__ == '__main__':
     args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION
-    debug = True
+    debug = False
     regular = task.get('regular', False)
 
 
