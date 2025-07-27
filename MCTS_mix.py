@@ -519,8 +519,8 @@ class MCTS:
                     # update single and enta with the mask
                     single_mask, _ = self.compare_and_mask(original_single, single)
                     enta_mask, _ = self.compare_and_mask(original_enta, enta)
-                    single = self.apply_mask_to_single(single_mask, original_single)
-                    enta = self.apply_mask_to_single(enta_mask, original_enta)
+                    single = self.apply_mask_to_single(single_mask, self.explorations['single'])
+                    enta = self.apply_mask_to_single(enta_mask, self.explorations['enta'])
 
                     if [single, enta] not in x_valid_list:
                         x_valid_list.append([single, enta])           
