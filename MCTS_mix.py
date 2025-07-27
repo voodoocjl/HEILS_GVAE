@@ -300,10 +300,15 @@ class MCTS:
         n_qubit = self.ARCH_CODE[0] // self.fold
         
         # Get original single and enta from current explorations
-        original_single = self.explorations['single']
-        original_enta = self.explorations['enta']
+        # original_single = self.explorations['single']
+        # original_enta = self.explorations['enta']
+
+        x_new = decoder(z)
+        mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+        gate_matrix = x_new[0] + mask
+        original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)
         
-        snr_values = np.linspace([0.01, 1], [0.1, 10], n_trials)
+        snr_values = np.linspace([0.01, 0.01], [0.1, 0.1], n_trials)
         snr_score_list = []
         diff_list = []
 
@@ -330,7 +335,7 @@ class MCTS:
                 step_size = [c1, c2]
                 x_new = sample_normal(z, logvar, step_size, arch_code_fold)
                 x_new = decoder(x_new)
-                mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+                # mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
 
                 if is_valid_ops_adj(x_new[0], n_qubit):
                     gate_matrix = x_new[0] + mask
@@ -338,8 +343,10 @@ class MCTS:
                     valid_count += 1
 
                     # Calculate differences
-                    single_diff = self.calculate_gate_difference(original_single, single)
-                    enta_diff = self.calculate_gate_difference(original_enta, enta)
+                    # single_diff = self.calculate_gate_difference(original_single, single)
+                    # enta_diff = self.calculate_gate_difference(original_enta, enta)
+                    _, single_diff = self.compare_and_mask(original_single, single)
+                    _, enta_diff = self.compare_and_mask(original_enta, enta)
 
                     # Calculate MSE between [single_diff, enta_diff] and [target_single_diff, target_enta_diff]
                     mse = (single_diff - target_single_diff) ** 2 + (enta_diff - target_enta_diff) ** 2
@@ -394,6 +401,79 @@ class MCTS:
                     diff_count += 1
         
         return diff_count
+    
+    def compare_and_mask(self, original_single, single):
+        """
+        Compare original_single and single, if corresponding positions are the same, assign 0,
+        otherwise keep the value from single.
+        
+        Args:
+            original_single: Original gate configuration
+            single: Current gate configuration
+            
+        Returns:
+            tuple: (masked_list, non_zero_count)
+                - masked_list: List with same structure as single, but with 0s where values match original_single
+                - non_zero_count: Number of non-zero elements (different positions)
+        """
+        if len(original_single) != len(single):
+            # Count all elements as different if lengths don't match
+            total_elements = sum(len(gate) for gate in single)
+            return single, total_elements
+        
+        result = []
+        non_zero_count = 0
+        
+        for orig_gate, curr_gate in zip(original_single, single):
+            if len(orig_gate) != len(curr_gate):
+                result.append(curr_gate)  # Keep original if sub-lengths don't match
+                non_zero_count += len(curr_gate)  # Count all elements as different
+                continue
+            
+            masked_gate = []
+            for orig_val, curr_val in zip(orig_gate, curr_gate):
+                if orig_val == curr_val:
+                    masked_gate.append(0)
+                else:
+                    masked_gate.append(curr_val)
+                    non_zero_count += 1  # Count non-zero (different) elements
+            result.append(masked_gate)
+        
+        return result, non_zero_count
+
+    def apply_mask_to_single(self, mask_result, single_new):
+        """
+        Apply mask_result to single_new by copying non-zero values from mask_result
+        to the corresponding positions in single_new, keeping other positions unchanged.
+        
+        Args:
+            mask_result: Masked gate configuration (output from compare_and_mask)
+            single_new: Target gate configuration to be modified
+            
+        Returns:
+            Modified single_new with non-zero values from mask_result applied
+        """
+        if len(mask_result) != len(single_new):
+            # If lengths don't match, return single_new unchanged
+            print(f"Warning: Length mismatch - mask_result: {len(mask_result)}, single_new: {len(single_new)}")
+            return single_new
+        
+        result = []
+        
+        for mask_gate, new_gate in zip(mask_result, single_new):
+            if len(mask_gate) != len(new_gate):
+                result.append(new_gate)  # Keep original if sub-lengths don't match
+                continue
+            
+            modified_gate = []
+            for mask_val, new_val in zip(mask_gate, new_gate):
+                if mask_val != 0:  # Non-zero value from mask_result
+                    modified_gate.append(mask_val)
+                else:  # Zero value, keep original from single_new
+                    modified_gate.append(new_val)
+            result.append(modified_gate)
+        
+        return result
 
     def Langevin_update(self, x, snr=None, n_steps=20, step_size=0.01): 
         z, logvar = self.ROOT.classifier.arch_to_z([x])
@@ -402,8 +482,12 @@ class MCTS:
         # Compute scaling factor c
         decoder = self.ROOT.classifier.GVAE_model.decoder
         decoder.eval()
-        
+
         n_qubit = arch_code_fold[0]
+        x_recon = decoder(z)
+        mask = get_proj_mask(x_recon[0], n_qubit, n_qubit)
+        gate_matrix = x_recon[0] + mask
+        original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)        
         # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
 
         # Compute optimal SNR if not provided
@@ -432,6 +516,12 @@ class MCTS:
                 if is_valid_ops_adj(x_new[0], n_qubit):
                     gate_matrix = x_new[0] + mask
                     single,enta, _ = generate_single_enta(gate_matrix, n_qubit)
+                    # update single and enta with the mask
+                    single_mask, _ = self.compare_and_mask(original_single, single)
+                    enta_mask, _ = self.compare_and_mask(original_enta, enta)
+                    single = self.apply_mask_to_single(single_mask, original_single)
+                    enta = self.apply_mask_to_single(enta_mask, original_enta)
+
                     if [single, enta] not in x_valid_list:
                         x_valid_list.append([single, enta])           
             if j < len(snr_sorted[0]) and j < len(snr_sorted[1]):
