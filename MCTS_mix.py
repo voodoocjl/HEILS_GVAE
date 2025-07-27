@@ -205,7 +205,7 @@ class MCTS:
             
             # print(Color.BLUE + 'Implicit Switch' + Color.RESET)
 
-            arch_next = self.Langevin_update(best_arch, args.SNR)
+            arch_next = self.Langevin_update(best_arch)
             # imp_arch_list = self.projection(arch_next, single, enta)
             for arch in arch_next:
                 self.search_space.append(arch)        
@@ -235,70 +235,210 @@ class MCTS:
         loss.backward(retain_graph=True)
         return x, x.grad
 
-    def compute_scaling_factor(self, x, decoder, snr_target, d):
-            """
-            Compute the scaling factor c based on the given formula.
-            
-            Args:
-                x (torch.Tensor): Input tensor.
-                decoder (nn.Module): Decoder model.
-                snr_target (float): Target signal-to-noise ratio.
-                d (int): Dimensionality of the input.
+    def compute_scaling_factor(self, x, decoder, snr_target):
+        """
+        Compute the scaling factor c for each SNR value in snr_target.
+        
+        Args:
+            x (torch.Tensor): Input tensor.
+            decoder (nn.Module): Decoder model.
+            snr_target (float or list of float): Target signal-to-noise ratio(s).
+            d (int): Dimensionality of the input.
 
-            Returns:
-                float: Scaling factor c.
-            """
-            # Step 1: Compute y = decoder(x)
-            x.requires_grad_(True)  # Enable gradient computation for x
-            y = decoder(x)
-            y = y[0]
-            # Step 2: Compute ||y||^2 (mean squared norm of y)
-            y_norm_squared = torch.mean(torch.norm(y, dim=-1) ** 2)
-            
-            # Step 3: Compute Jacobian J of the decoder
-            J = []
-            for i in range(y.shape[2]):  # Iterate over output dimensions
-                grad_outputs = torch.zeros_like(y)
-                grad_outputs[:, i] = 1.0  # One-hot vector for each output dimension
-                J_i = torch.autograd.grad(y, x, grad_outputs=grad_outputs, retain_graph=True, create_graph=True)[0]
-                J.append(J_i)
-            J = torch.stack(J, dim=1)  # Stack Jacobian components
-            
-            # Step 4: Compute ||J||_2^2 (Frobenius norm squared of the Jacobian)
-            J_norm_squared = torch.sum(J ** 2)
-            
-            # Step 5: Compute scaling factor c
-            x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
+        Returns:
+            list: List of scaling factors c, one for each snr_target value.
+        """
+        # Step 1: Compute y = decoder(x)
+        d = x.shape[-1]  # Dimensionality
+        x.requires_grad_(True)  # Enable gradient computation for x
+        y = decoder(x)
+        y = y[0]
+        # Step 2: Compute ||y||^2 (mean squared norm of y)
+        y_norm_squared = torch.mean(torch.norm(y, dim=-1) ** 2)
+
+        # Step 3: Compute Jacobian J of the decoder
+        J = []
+        for i in range(y.shape[2]):  # Iterate over output dimensions
+            grad_outputs = torch.zeros_like(y)
+            grad_outputs[:, i] = 1.0  # One-hot vector for each output dimension
+            J_i = torch.autograd.grad(y, x, grad_outputs=grad_outputs, retain_graph=True, create_graph=True)[0]
+            J.append(J_i)
+        J = torch.stack(J, dim=1)  # Stack Jacobian components
+
+        # Step 4: Compute ||J||_2^2 (Frobenius norm squared of the Jacobian)
+        J_norm_squared = torch.sum(J ** 2)
+
+        # Step 5: Compute scaling factor c for each snr_target
+        x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
+        if isinstance(snr_target, (list, tuple, np.ndarray)):
+            c_list = []
+            for snr in snr_target:
+                c = torch.sqrt(y_norm_squared / (snr * d * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
+                c_list.append(c.item())
+            return c_list
+        else:
             c = torch.sqrt(y_norm_squared / (snr_target * d * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
-        
-            return c.item() 
+            return [c.item()]
     
-    def Langevin_update(self, x, snr=10, n_steps=20, step_size=0.01):
+    def compute_optimal_snr(self, z, logvar, target_single_diff=4, target_enta_diff=4, snr_range=(0.1, 10.0), n_trials=10):
+        """
+        Compute the most likely SNR [snr_single, snr_enta] that generates circuits with 
+        single_diff and enta_diff <= target values.
         
-        x, logvar = self.ROOT.classifier.arch_to_z([x])
+        Args:
+            x: Input architecture
+            
+            snr_range: Range of SNR values to search
+            n_trials: Number of SNR values to test per dimension
+            
+        Returns:
+            Optimal SNR values [snr_single, snr_enta]
+        """
+        
+        decoder = self.ROOT.classifier.GVAE_model.decoder
+        decoder.eval()
+        n_qubit = self.ARCH_CODE[0] // self.fold
+        
+        # Get original single and enta from current explorations
+        original_single = self.explorations['single']
+        original_enta = self.explorations['enta']
+        
+        snr_values = np.linspace([0.01, 1], [0.1, 10], n_trials)
+        snr_score_list = []
+        diff_list = []
+
+        total_nodes = z.shape[1]
+        chunks1, chunks2 = [], []
+        for i in range(0, total_nodes, 2*n_qubit):
+            chunks1.append(z[:, i:i + n_qubit, :])
+            chunks2.append(z[:, i + n_qubit:i + 2*n_qubit, :])
+        z_single = torch.cat(chunks1, dim=1)
+        z_enta = torch.cat(chunks2, dim=1)
+
+        for snr_pair in snr_values:
+            snr_single, snr_enta = snr_pair[0], snr_pair[1]
+            valid_count = 0
+            diff = []
+            scores = []
+
+            # Compute scaling factors
+            c1 = self.compute_scaling_factor(z_single, decoder, snr_single)
+            c2 = self.compute_scaling_factor(z_enta, decoder, snr_enta)
+
+            # Test a few samples with this SNR pair
+            for _ in range(20):
+                step_size = [c1, c2]
+                x_new = sample_normal(z, logvar, step_size, arch_code_fold)
+                x_new = decoder(x_new)
+                mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+
+                if is_valid_ops_adj(x_new[0], n_qubit):
+                    gate_matrix = x_new[0] + mask
+                    single, enta, _ = generate_single_enta(gate_matrix, n_qubit)
+                    valid_count += 1
+
+                    # Calculate differences
+                    single_diff = self.calculate_gate_difference(original_single, single)
+                    enta_diff = self.calculate_gate_difference(original_enta, enta)
+
+                    # Calculate MSE between [single_diff, enta_diff] and [target_single_diff, target_enta_diff]
+                    mse = (single_diff - target_single_diff) ** 2 + (enta_diff - target_enta_diff) ** 2
+                    scores.append(mse)
+                    diff.append((single_diff, enta_diff))
+
+            # Score based on validity and constraint satisfaction
+            if valid_count > 0:
+                score = np.mean(scores)
+                diff = np.mean(diff, axis=0)
+                snr_score_list.append((score, diff.tolist(), [snr_single, snr_enta]))
+                # diff_list.append((diff, [snr_single, snr_enta]))
+            else:
+                # If no valid samples, assign a high score
+                snr_score_list.append((float('inf'), float('inf'), [snr_single, snr_enta]))
+
+        # Sort the snr_score_list by score
+        snr_score_list_sorted = sorted(snr_score_list, key=lambda x: x[0])
+        print("Sorted SNR values by score:")
+        for score, diff, snr in snr_score_list_sorted:
+            score_str = f"{score:.2f}" if isinstance(score, float) and not np.isinf(score) else str(score)
+            snr_str = [f"{v:.2f}" for v in snr]
+            if isinstance(diff, (list, np.ndarray)):
+                diff_str = [f"{v:.2f}" for v in diff]
+            else:
+                diff_str = diff
+            print(f"SNR: {snr_str}, Score: {score_str}, Diff: {diff_str}")
+        
+        best_snr = [f"{v:.2f}" for v in snr_score_list_sorted[0][2]]
+        best_diff = [f"{v:.2f}" for v in snr_score_list_sorted[0][1]] if isinstance(snr_score_list_sorted[0][1], (list, np.ndarray)) else snr_score_list_sorted[0][1]
+        print(f"Optimal SNR [single, enta]: {best_snr}, Difference: {best_diff}")
+        return snr_score_list_sorted
+    
+    def calculate_gate_difference(self, gates1, gates2):
+        """
+        Calculate the difference between two gate configurations.
+        
+        Args:
+            gates1: First gate configuration (list of gate specs)
+            gates2: Second gate configuration (list of gate specs)
+            
+        Returns:
+            Total difference count
+        """
+        if len(gates1) != len(gates2):
+            return float('inf')
+        
+        diff_count = 0
+        for g1, g2 in zip(gates1, gates2):            
+            for i in range(len(g1)):
+                if g1[i] != g2[i]:
+                    diff_count += 1
+        
+        return diff_count
+
+    def Langevin_update(self, x, snr=None, n_steps=20, step_size=0.01): 
+        z, logvar = self.ROOT.classifier.arch_to_z([x])
         x_valid_list = []
 
         # Compute scaling factor c
         decoder = self.ROOT.classifier.GVAE_model.decoder
         decoder.eval()
-        d = x.shape[2]  # Dimensionality
-        c = self.compute_scaling_factor(x, decoder, snr, d)
-        n_qubit = self.ARCH_CODE[0] // self.fold        
+        
+        n_qubit = arch_code_fold[0]
         # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
 
-        for i in range(1000):
-            noise = torch.randn_like(x)
-            step_size = c
-            x_new = sample_normal(x, logvar,step_size)
-            # x_new = x + step_size * noise
-            x_new = decoder(x_new)
-            mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
-            if is_valid_ops_adj(x_new[0], n_qubit):
-                gate_matrix = x_new[0] + mask
-                single,enta, _ = generate_single_enta(gate_matrix, n_qubit)
-                if [single, enta] not in x_valid_list:
-                    x_valid_list.append([single, enta])
-        print('Number of valid ciruicts:', len(x_valid_list))
+        # Compute optimal SNR if not provided
+        if snr is None:
+            snr = self.compute_optimal_snr(z, logvar)
+        snr_sorted = [[item[2][0] for item in snr], [item[2][1] for item in snr]]
+
+        total_nodes = z.shape[1]
+        chunks1, chunks2 = [], []
+        for i in range(0, total_nodes, 2*n_qubit):
+            chunks1.append(z[:, i:i + n_qubit, :])
+            chunks2.append(z[:, i + n_qubit:i + 2*n_qubit, :])
+        z_single = torch.cat(chunks1, dim=1)
+        z_enta = torch.cat(chunks2, dim=1)
+        c1 = self.compute_scaling_factor(z_single, decoder, snr_sorted[0])  # snr_single
+        c2 = self.compute_scaling_factor(z_enta, decoder, snr_sorted[1])  # snr_enta
+
+        j = 0
+        while len(x_valid_list) < 100 and j < len(c1):
+            step_size = [c1[j], c2[j]]
+            for i in range(1000):
+                # noise = torch.randn_like(z)
+                x_new = sample_normal(z, logvar,step_size, arch_code_fold)  # Use fold to adjust the step size
+                x_new = decoder(x_new)
+                mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+                if is_valid_ops_adj(x_new[0], n_qubit):
+                    gate_matrix = x_new[0] + mask
+                    single,enta, _ = generate_single_enta(gate_matrix, n_qubit)
+                    if [single, enta] not in x_valid_list:
+                        x_valid_list.append([single, enta])           
+            if j < len(snr_sorted[0]) and j < len(snr_sorted[1]):
+                print(f'Number of valid circuits: {len(x_valid_list)} of SNR [{snr_sorted[0][j]:.2f}, {snr_sorted[1][j]:.2f}]')
+            else:
+                print(f'Number of valid circuits: {len(x_valid_list)}')
+            j += 1
         return x_valid_list
 
     def dump_all_states(self, num_samples):
@@ -465,7 +605,7 @@ class MCTS:
                 diff = difference_between_archs(original_single, original_enta, single, enta)
                 difference.append(diff)
             design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
-            arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)            
+            arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)           
 
             jobs.append(job)
             designs.append(design)
@@ -744,6 +884,7 @@ if __name__ == '__main__':
     check_file(task['task']+'_'+task['option'])
     
     arch_code = [task['n_qubits'], task['n_layers']]
+    arch_code_fold = [task['n_qubits'] // task['fold'], task['n_layers']]
     args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION

@@ -71,20 +71,24 @@ def add_ppg_column(agent, csv_file):
     # 保存修改后的 CSV 文件
     df.to_csv(csv_file, index=False)
 
-def sample_normal(mu, logvar, step_size):
+def sample_normal(mu, logvar, step_size, arch_code_fold):
     """
-    Sample from N(mu, exp(logvar)) using the reparameterization trick.
-    Args:
-        mu (torch.Tensor): Mean of the distribution.
-        logvar (torch.Tensor): Log-variance of the distribution.
-    Returns:
-        torch.Tensor: Sampled tensor.
+    Sample from N(mu, exp(logvar)) using the reparameterization trick.   
     """
     std = torch.exp(logvar)
-    eps = torch.randn_like(std)
+    eps = torch.randn_like(mu)
+    n_qubits, n_layers = arch_code_fold
+    # Ensure step_size is a list of list
+    if get_list_dimensions(step_size) == 1:
+        step_size = [[item] for item in step_size]
+    step_single, step_enta = step_size
     
+    # Adjust the step size for single and enta
+    step_size = step_single * n_qubits + step_enta * n_qubits
+    step_size = step_size * n_layers
+    step_size = torch.Tensor(np.diag(step_size)).to(mu.device)
     # return mu + eps * std * step_size
-    return mu + eps * step_size
+    return mu + torch.matmul(step_size, eps)
 
 def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
     single_diff = sum(abs(np.array(a) - np.array(b)).sum() for a, b in zip(original_single, decoded_single))                    

@@ -22,18 +22,21 @@ def Langevin_update(x, model, snr=10, step_size=0.01):
         decoder = model.decoder
         decoder.eval()
         d = x.shape[2]  # Dimensionality
-        c = compute_scaling_factor(x, decoder, snr, d)
+        c1 = compute_scaling_factor(x, decoder, snr[0], d)
+        c2 = compute_scaling_factor(x, decoder, snr[1], d)
+        
+        # c2 = 0
         n_qubit = arch_code_fold[0]        
         # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
 
         for i in range(1000):
-            noise = torch.randn_like(x)
-            step_size = c
-            x_new = sample_normal(x, logvar,step_size)
+            # noise = torch.randn_like(x)
+            step_size = [c1, c2]
+            x_new = sample_normal(x, logvar,step_size, arch_code_fold)
             # x_new = x + step_size * noise
             x_new = decoder(x_new)
             mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
-            if is_valid_ops_adj(x_new[0], n_qubit):
+            if is_valid_ops_adj(x_new[0], n_qubit, threshold=6):
                 gate_matrix = x_new[0] + mask
                 single,enta, _ = generate_single_enta(gate_matrix, n_qubit)
                 if [single, enta] not in x_valid_list:
@@ -41,15 +44,21 @@ def Langevin_update(x, model, snr=10, step_size=0.01):
         print('Number of valid ciruicts:', len(x_valid_list))
         return x_valid_list
 
-def sample_normal(mu, logvar, step_size):
+def sample_normal(mu, logvar, step_size, arch_code_fold):
     """
     Sample from N(mu, exp(logvar)) using the reparameterization trick.   
     """
     std = torch.exp(logvar)
     eps = torch.randn_like(std)
-    
+
+    n_qubits, n_layers = arch_code_fold
+    step_single, step_enta = step_size
+    # Adjust the step size for single and enta
+    step_size = [step_single] * n_qubits + [step_enta] * n_qubits
+    step_size = step_size * n_layers
+    step_size = torch.Tensor(np.diag(step_size))
     # return mu + eps * std * step_size
-    return mu + eps * step_size
+    return mu + torch.matmul(step_size, eps)
 
 def evaluate_langevin_neighborhood(arch, snr_values, task):
     results = {}
@@ -60,26 +69,27 @@ def evaluate_langevin_neighborhood(arch, snr_values, task):
         print(f"\033[31mEvaluating SNR={snr}\033[0m")
         Arch = cir_to_matrix(original_single, original_enta, arch_code, args.fold)
         arch_next = Langevin_update(Arch, GVAE_model, snr)
-        if len(arch_next) <= 5:
-            print(f"Valid architectures {len(arch_next)} found for SNR={snr}. Skipping evaluation.")
-            results[snr] = None
-            continue
+        if len(arch_next) <= 10:
+            number = len(arch_next)
         else:
-            arch_next = random.sample(arch_next, 5)  # Sample 5 architectures for evaluation
-            performances = []
-            difference = []
-            for single, enta in arch_next:
-                print('single:', single, 'enta:', enta)
-                # design = translator(single, enta, 'full', agent.ARCH_CODE, agent.fold)
-                # # Evaluate using Scheme (set epochs as needed)
-                # model, report = Scheme(design, task, weight, epochs=1)
-                # performances.append(report['mae'])
-                diff = difference_between_archs(original_single, original_enta, single, enta)
-                difference.append(diff)
-                print('\033[33mDifference:\033[0m', diff)
+            number = 10
+        print(f"Found {number} architectures for SNR={snr}.")
+            
+        arch_next = random.sample(arch_next, number)  # Sample 5 architectures for evaluation
+        performances = []
+        difference = []
+        for single, enta in arch_next:
+            print('single:', single, 'enta:', enta)
+            # design = translator(single, enta, 'full', agent.ARCH_CODE, agent.fold)
+            # # Evaluate using Scheme (set epochs as needed)
+            # model, report = Scheme(design, task, weight, epochs=1)
+            # performances.append(report['mae'])
+            diff = difference_between_archs(original_single, original_enta, single, enta)
+            difference.append(diff)
+            print('\033[33mDifference:\033[0m', diff)
             # mean_perf = np.mean(performances) if performances else None
             mean_perf = np.mean(difference, axis=0) if difference else None
-            results[snr] = mean_perf
+            results[tuple(snr)] = mean_perf
     return results
 
 def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
@@ -124,17 +134,17 @@ if __name__ == "__main__":
     # with open('data/random_circuits_mnist_5.json', 'r') as f:
     #     initial_circuits = json.load(f)    
 
-    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
-    checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
+    checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
+    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
 
     input_dim = 4 + arch_code_fold[0]
     GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
     GVAE_model.load_state_dict(checkpoint['model_state'])
 
-    snr_values = np.linspace(0.01, 1, 10)
+    snr_values = np.linspace([0.1, 1], [1, 10], 10)
     results_all = []
 
-    for idx, arch in enumerate(initial_circuits[:10]):
+    for idx, arch in enumerate(initial_circuits[:1]):
         print(f"\033[34mEvaluating circuit {idx+1}/{len(initial_circuits)}\033[0m")
         snr_results = evaluate_langevin_neighborhood(arch, snr_values, task)
         print(f"Results for circuit {idx+1}: {snr_results}")
@@ -148,7 +158,7 @@ if __name__ == "__main__":
 
     print("\nMean differences for each SNR value across circuits:")
     for snr in snr_values:
-        mean_diff = np.mean([r[snr] for r in results_all if r[snr] is not None], axis=0)
+        mean_diff = np.mean([r[tuple(snr)] for r in results_all if r[tuple(snr)] is not None], axis=0)
         print(f"SNR={snr}: Mean Diff={mean_diff}")
 
     # Optionally, save results to CSV
