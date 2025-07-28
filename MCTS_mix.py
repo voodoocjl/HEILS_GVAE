@@ -307,7 +307,6 @@ class MCTS:
         
         snr_values = np.linspace([0.01, 0.01], [0.1, 0.1], n_trials)
         snr_score_list = []
-        diff_list = []
 
         total_nodes = z.shape[1]
         chunks1, chunks2 = [], []
@@ -328,7 +327,7 @@ class MCTS:
             c2 = self.compute_scaling_factor(z_enta, decoder, snr_enta)
 
             # Test a few samples with this SNR pair
-            for _ in range(20):
+            for _ in range(100):
                 step_size = [c1, c2]
                 x_new = sample_normal(z, logvar, step_size, arch_code_fold)
                 x_new = decoder(x_new)
@@ -419,24 +418,24 @@ class MCTS:
             return single, total_elements
         
         result = []
-        non_zero_count = 0
+        diff_count = 0
         
         for orig_gate, curr_gate in zip(original_single, single):
             if len(orig_gate) != len(curr_gate):
                 result.append(curr_gate)  # Keep original if sub-lengths don't match
-                non_zero_count += len(curr_gate)  # Count all elements as different
+                diff_count += len(curr_gate)  # Count all elements as different
                 continue
             
             masked_gate = []
             for orig_val, curr_val in zip(orig_gate, curr_gate):
                 if orig_val == curr_val:
-                    masked_gate.append(0)
+                    masked_gate.append(-1)
                 else:
                     masked_gate.append(curr_val)
-                    non_zero_count += 1  # Count non-zero (different) elements
+                    diff_count += 1  # Count non-zero (different) elements
             result.append(masked_gate)
         
-        return result, non_zero_count
+        return result, diff_count
 
     def apply_mask_to_single(self, mask_result, single_new):
         """
@@ -464,7 +463,7 @@ class MCTS:
             
             modified_gate = []
             for mask_val, new_val in zip(mask_gate, new_gate):
-                if mask_val != 0:  # Non-zero value from mask_result
+                if mask_val != -1:  # Non-zero value from mask_result
                     modified_gate.append(mask_val)
                 else:  # Zero value, keep original from single_new
                     modified_gate.append(new_val)
@@ -484,8 +483,7 @@ class MCTS:
         x_recon = decoder(z)
         mask = get_proj_mask(x_recon[0], n_qubit, n_qubit)
         gate_matrix = x_recon[0] + mask
-        original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)        
-        # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
+        original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)
 
         # Compute optimal SNR if not provided
         if snr is None:
@@ -975,7 +973,7 @@ if __name__ == '__main__':
     args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION
-    debug = False
+    debug = True
     regular = task.get('regular', False)
 
 
