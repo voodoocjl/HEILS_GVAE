@@ -305,7 +305,9 @@ class MCTS:
         gate_matrix = x_new[0] + mask
         original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)
         
-        snr_values = np.linspace([0.01, 0.01], [0.1, 0.1], n_trials)
+        # snr_values = np.linspace([0.01, 0.01], [0.1, 0.1], n_trials)
+        snr_values = np.linspace([0.1, 0.01], [1, 0.5], n_trials)
+
         snr_score_list = []
 
         total_nodes = z.shape[1]
@@ -902,6 +904,13 @@ def create_agent(task, arch_code, pre_file, node=None):
         
         single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
         enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
+
+        with open('data/random_circuits_mnist_4.json', 'rb') as file:
+            circuits = json.load(file)
+
+        single = circuits[0]['single']
+        enta = circuits[0]['enta']
+        args.init_weight = 'random_circuits'
         
         agent.explorations['single'] = single
         agent.explorations['enta'] = enta
@@ -945,7 +954,7 @@ if __name__ == '__main__':
     task = {
     'task': 'MNIST_4',
     'option': 'mix_no_reg',
-    'regular': False,
+    'regular': True,
     'n_qubits': 4,
     'n_layers': 4,
     'fold': 1
@@ -973,11 +982,11 @@ if __name__ == '__main__':
     args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION
-    debug = True
+    debug = False
     regular = task.get('regular', False)
 
 
-    for iter in range(ITERATION, 50):
+    for iter in range(ITERATION, 30):
         jobs, designs, archs, nodes = agent.pre_search(iter)
         results = {}
         n_jobs = len(jobs)

@@ -3,105 +3,47 @@ import numpy as np
 import torch
 
 from schemes import Scheme
-from FusionModel import translator, cir_to_matrix
+from FusionModel import *
 from Arguments import Arguments
 import random
 import json
 from GVAE_PRE.gen_random_circuits import generate_random_circuits
-from GVAE_PRE.utils import get_proj_mask, is_valid_ops_adj, generate_single_enta_op, compute_scaling_factor, arch_to_z
-from GVAE_model import GVAE
+from GVAE_PRE.utils import get_proj_mask, compute_scaling_factor
 from configs import configs
+from GVAE_TEST.GVAE_model_old import GVAE, generate_single_enta, is_valid_ops_adj, preprocessing, op_list_to_design
+from GVAE_TEST.GVAE_translator import *
 
 
-def op_list_to_design(op_list, arch_code_fold):
-    """
-    基于op_list生成可以被QNET使用的design列表
-    
-    Args:
-        op_list: 量子门操作列表，格式为[(gate_name, [qubit_indices]), ...]
-        arch_code_fold: [n_qubits, n_layers]
-    
-    Returns:
-        design: 包含量子电路设计信息的列表，每个元素为(gate_type, [wire_indices], layer)
-    """
-    design = []
-    n_qubits, n_layers = arch_code_fold
-    
-    for op_idx, (gate_name, qubits) in enumerate(op_list):
-        # 计算当前操作所在的层
-        layer = op_idx // (2 * n_qubits)
-        
-        if gate_name == 'Identity':
-            # Identity门跳过，不添加到design中
-            continue
-        elif gate_name == 'U3':
-            # 单量子门U3
-            design.append(('U3', qubits, layer))
-        elif gate_name == 'data':
-            # 数据上传门
-            design.append(('data', qubits, layer))
-        elif gate_name == 'data+U3':
-            # data+U3 需要分解为两个门：先data，再U3
-            design.append(('data', qubits, layer))
-            design.append(('U3', qubits, layer))
-        elif gate_name == 'C(U3)':
-            # 控制U3门
-            design.append(('C(U3)', qubits, layer))
-    
-    return design
+def projection(arch_next, single, enta):
+    # Define the projection logic here
+    single = sorted(single, key=lambda x: x[0])
+    enta = sorted(enta, key=lambda x: x[0])
+    single = np.array(single)
+    enta = np.array(enta)
+    projected_archs = []
+    for arch in arch_next:
+        new_single = single * (arch[0]==-1) + arch[0] * (arch[0]!=-1)
+        new_enta = enta * (arch[1]==-1) + arch[1] * (arch[1]!=-1)
+        projected_archs.append([new_single.tolist(), new_enta.tolist()])
+    return projected_archs
 
+def arch_to_z(archs, arch_code_fold, encoder):
+        # Convert arch matrix to latent space representations
+        adj_list, op_list = [], []
+        for net in archs:
+            circuit_ops = generate_circuits(net, arch_code_fold)
+            _, gate_matrix, adj_matrix = get_gate_and_adj_matrix(circuit_ops, arch_code_fold)
+            ops = torch.tensor(gate_matrix, dtype=torch.float32).unsqueeze(0)
+            adj = torch.tensor(adj_matrix, dtype=torch.float32).unsqueeze(0)
+            adj_list.append(adj)
+            op_list.append(ops)
 
-def single_enta_to_design(single, enta, arch_code_fold):
-    """
-    从single和enta编码生成可以被QNET使用的design列表
-    
-    Args:
-        single: 单量子门编码，格式为[[qubit, gate_config_layer0, gate_config_layer1, ...], ...]
-                gate_config每两位表示一层：00=Identity, 01=U3, 10=data, 11=data+U3
-        enta: 双量子门编码，格式为[[qubit, target_layer0, target_layer1, ...], ...]
-              每一位表示在该层中的目标量子比特位置
-        arch_code_fold: [n_qubits, n_layers]
-    
-    Returns:
-        design: 包含量子电路设计信息的列表，每个元素为(gate_type, [wire_indices], layer)
-    """
-    design = []
-    n_qubits, n_layers = arch_code_fold
-    
-    # 处理每一层
-    for layer in range(n_layers):
-        # 首先处理单量子门
-        for qubit_config in single:
-            qubit = qubit_config[0] - 1  # 转换为0-based索引
-            # 每层的配置在列表中的位置：1 + layer*2 和 1 + layer*2 + 1
-            config_start_idx = 1 + layer * 2
-            if config_start_idx + 1 < len(qubit_config):
-                gate_config = f"{qubit_config[config_start_idx]}{qubit_config[config_start_idx + 1]}"
-                
-                if gate_config == '01':  # U3
-                    design.append(('U3', [qubit], layer))
-                elif gate_config == '10':  # data
-                    design.append(('data', [qubit], layer))
-                elif gate_config == '11':  # data+U3
-                    design.append(('data', [qubit], layer))
-                    design.append(('U3', [qubit], layer))
-                # 00 (Identity) 跳过
-        
-        # 然后处理双量子门
-        for qubit_config in enta:
-            control_qubit = qubit_config[0] - 1  # 转换为0-based索引
-            # 目标量子比特位置在列表中的位置：1 + layer
-            target_idx = 1 + layer
-            if target_idx < len(qubit_config):
-                target_qubit = qubit_config[target_idx] - 1  # 转换为0-based索引
-                
-                # 如果控制量子比特和目标量子比特不同，则添加C(U3)门
-                if control_qubit != target_qubit:
-                    design.append(('C(U3)', [control_qubit, target_qubit], layer))
-                # 如果相同，则跳过（相当于Identity）
-    
-    return design
-
+        adj = torch.cat(adj_list, dim=0)
+        ops = torch.cat(op_list, dim=0)
+        adj, ops, prep_reverse = preprocessing(adj, ops, **configs[4]['prep'])
+        encoder.eval()
+        mu, logvar = encoder(ops, adj)
+        return mu, logvar
 
 def Langevin_update(x, model, snr=10, step_size=0.01):
         
@@ -125,15 +67,14 @@ def Langevin_update(x, model, snr=10, step_size=0.01):
             x_new = sample_normal(x, logvar,step_size, arch_code_fold)
             # x_new = x + step_size * noise
             x_new = decoder(x_new)
-            mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
-            if is_valid_ops_adj(x_new[0], n_qubit, threshold=6):
-                # gate_matrix = x_new[0] + mask
-                gate_matrix = x_new[0]
-                single,enta, op_list = generate_single_enta_op(gate_matrix, n_qubit)
-                if [single, enta, op_list] not in x_valid_list:
-                    x_valid_list.append([single, enta, op_list])
+            # mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
+            if is_valid_ops_adj(x_new[0], x_new[1], n_qubit):
+                single,enta,op_result = generate_single_enta(x_new[0], n_qubits)
+                x_valid_list.append([single, enta, op_result])
+
         print('Number of valid circuits:', len(x_valid_list))
         return x_valid_list
+    
 
 def sample_normal(mu, logvar, step_size, arch_code_fold):
     """
@@ -146,7 +87,7 @@ def sample_normal(mu, logvar, step_size, arch_code_fold):
     step_single, step_enta = step_size
     # Adjust the step size for single and enta
     step_size = [step_single] * n_qubits + [step_enta] * n_qubits
-    step_size = step_size * n_layers
+    step_size = [1] + step_size * n_layers + [1]  # start and end
     step_size = torch.Tensor(np.diag(step_size))
     # return mu + eps * std * step_size
     return mu + torch.matmul(step_size, eps)
@@ -159,7 +100,7 @@ def evaluate_langevin_neighborhood(arch, snr_values, task):
         print("***"* 20)
         print(f"\033[31mEvaluating SNR={snr}\033[0m")
         Arch = cir_to_matrix(original_single, original_enta, arch_code, args.fold)
-        arch_next = Langevin_update(Arch, GVAE_model, snr)
+        arch_next = Langevin_update(Arch, GVAE_model, snr)        
         evaluate_number = task['eval_number']
         if len(arch_next) <= evaluate_number:
             number = len(arch_next)
@@ -169,20 +110,25 @@ def evaluate_langevin_neighborhood(arch, snr_values, task):
         print(f"Found {len(arch_next)} architectures for SNR={snr}.")
             
         arch_next = random.sample(arch_next, number)  # Sample 5 architectures for evaluation
+
+        # arch_next = projection(arch_next, original_single, original_enta)
+
         performances = []
         difference = []
-        for single, enta, op_list in arch_next:
+        for arch in arch_next:
+            single = arch[0]
+            enta = arch[1]
             print('single:', single, 'enta:', enta)
 
             # Evaluate using Scheme (set epochs as needed)
-            
-            design = op_list_to_design(op_list, arch_code_fold)
-            # design = single_enta_to_design(single, enta, arch_code_fold)
+            # design = translator(single, enta, 'full', arch_code_fold)
+            design = op_list_to_design(arch[2], arch_code_fold)
+
             model, report = Scheme(design, task, weight, epochs=task['eval_epochs'])
             performances.append(report['mae'])
 
             # diff = difference_between_archs(original_single, original_enta, single, enta)
-            diff = [0, 0]
+            diff = [0, 0]  # Placeholder for difference calculation
             difference.append(diff)
             print('\033[33mDifference:\033[0m', diff)
 
@@ -216,8 +162,8 @@ if __name__ == "__main__":
         'n_layers': 4,
         'fold': 1,
         'eval_number': 10,
-        'eval_epochs': 3,
-        'snr_values': [[0.1, 0.1], [1, 1], [3, 3]]
+        'eval_epochs': 5,
+        'snr_values': np.linspace([0.1, 0.1], [3, 3], 3)
     }
 
     # task = {
@@ -241,16 +187,14 @@ if __name__ == "__main__":
     initial_circuits = [{'single': single, 'enta': enta}]
 
     # with open('data/random_circuits_mnist_5.json', 'r') as f:
-    #     initial_circuits = json.load(f)    
-
-    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=torch.device('cpu'), weights_only=True)
-    # checkpoint = torch.load('pretrained/model-circuits_5_qubits-swap.pt', map_location=torch.device('cpu'), weights_only=True)
-    checkpoint = torch.load('pretrained/model-circuits_4_qubits-19.pt', map_location=torch.device('cpu'), weights_only=True)
+    #     initial_circuits = json.load(f)
+    
+    checkpoint = torch.load('GVAE_TEST/best_model.pt', map_location=torch.device('cpu'), weights_only=True)
 
 
-    input_dim = 4 + arch_code_fold[0]
+    input_dim = 7 + arch_code_fold[0]
     GVAE_model = GVAE((input_dim, 32, 64, 128, 64, 32, 16), normalize=True, dropout=0.3, **configs[4]['GAE'])
-    GVAE_model.load_state_dict(checkpoint['model_state'])
+    GVAE_model.load_state_dict(checkpoint)
 
     snr_values = task['snr_values']
     results_all = []
@@ -288,7 +232,7 @@ if __name__ == "__main__":
 
     # Save results to CSV
     import csv
-    with open('langevin_snr_results.csv', 'w', newline='') as f:
+    with open('langevin_snr_old_results.csv', 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['Circuit', 'SNR_Single', 'SNR_Enta', 'Mean_MAE', 'Std_MAE', 'Mean_Single_Diff', 'Mean_Enta_Diff', 'Std_Single_Diff', 'Std_Enta_Diff'])
         for idx, snr_results in enumerate(results_all):
@@ -304,4 +248,4 @@ if __name__ == "__main__":
                     std_single_diff, std_enta_diff = 'N/A', 'N/A'
                 writer.writerow([idx, snr_single, snr_enta, mean_mae, std_mae, mean_single_diff, mean_enta_diff, std_single_diff, std_enta_diff])
     
-    print(f"\nResults saved to 'langevin_snr_results.csv'")
+    print(f"\nResults saved to 'langevin_snr_old_results.csv'")

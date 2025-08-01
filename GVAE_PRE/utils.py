@@ -4,6 +4,7 @@ import torch
 import GVAE_PRE.var_config as vc 
 import torch.nn.functional as F
 import numpy as np
+from FusionModel import gen_arch
 
 current_path = os.getcwd()
 
@@ -304,65 +305,88 @@ def is_valid_ops_adj(full_op, n_qubits):
     else:
         return True
     
-def generate_single_enta(gate_matrix, n_qubits):
- 
-    # Transfer gate_matrix into one-hot format
+def generate_single_enta_op(gate_matrix, n_qubits):
+    """
+    从gate_matrix中解析量子电路信息
+    矩阵结构: (num_rows, 4+n_qubits)
+    - 前4列: 单量子门类型 ['Identity', 'U3', 'data', 'data+U3']
+    - 后n_qubits列: CU3双量子门的目标量子比特位置
+    - 行索引: 包含当前量子比特和层信息
+    """
     gate_matrix = gate_matrix.squeeze(0).cpu().detach().numpy()
-    one_hot_gate_matrix = np.zeros_like(gate_matrix, dtype=int)
+    
+    # 对每行整体求argmax得到最大值位置
     max_indices = np.argmax(gate_matrix, axis=1)
-    one_hot_gate_matrix[np.arange(gate_matrix.shape[0]), max_indices] = 1
- 
-    # Generate single and enta
+    
+    op_results = []
+    gate_type_names = ['Identity', 'U3', 'data', 'data+U3']
+    
+    # 根据矩阵结构解析每一行
+    num_rows = gate_matrix.shape[0]
+    n_layers = num_rows // (n_qubits * 2)  # 计算层数
+    
+    for row_idx in range(num_rows):
+        # 计算当前行对应的层和量子比特信息
+        layer_idx = row_idx // (n_qubits * 2)
+        position_in_layer = row_idx % (n_qubits * 2)
+        max_idx = max_indices[row_idx]
+        
+        # 计算当前量子比特索引
+        if position_in_layer < n_qubits:
+            qubit_idx = position_in_layer
+        else:
+            qubit_idx = position_in_layer - n_qubits
+        
+        if max_idx < 4:
+            # 最大值在前4列，是单量子门
+            gate_name = gate_type_names[max_idx]
+            op_results.append((gate_name, [qubit_idx]))
+        else:
+            # 最大值在后n_qubits列，是CU3双量子门
+            target_qubit = max_idx - 4  # 目标量子比特索引
+            if qubit_idx == target_qubit:
+                # 控制和目标量子比特相同，设为Identity
+                op_results.append(('Identity', [qubit_idx]))
+            else:
+                op_results.append(('C(U3)', [qubit_idx, target_qubit]))
+    
+    # 转换为single和enta格式
     single = [[i + 1] for i in range(n_qubits)]
     enta = [[i + 1] for i in range(n_qubits)]
-    single_list_info = [[0, 0], [0, 1], [1, 0], [1, 1]]
-    for n in range(0, len(gate_matrix), n_qubits * 2):
-        qubit_info = one_hot_gate_matrix[n:n+n_qubits, :-n_qubits]
-        adj_info = one_hot_gate_matrix[n+n_qubits:n+2*n_qubits, -n_qubits:]
+    
+    # 处理每一层
+    for layer in range(n_layers):
+        layer_start = layer * n_qubits * 2
+        
+        # 处理单量子门 (每层的前n_qubits个操作)
         for q in range(n_qubits):
-            single_res = np.sum(qubit_info[q] * np.array((0, 1, 2, 3)))
-            single[q].extend(single_list_info[single_res])
-            try:
-                enta[q].append(int(np.squeeze(np.argwhere(adj_info[q])))+1)
-            except:
-                enta[q].append(q+1)
- 
-    # Translate single to single op_results
-    single_op_results = {i: [] for i in range(n_qubits)}
-    for col_index in range(1, len(single[0]), 2):
-        for row_index in range(len(single)):
-            value1 = single[row_index][col_index]
-            value2 = single[row_index][col_index + 1]
-            combined = f"{value1}{value2}"
-            if combined == '00':
-                single_op_results[(col_index-1)/2].append(('Identity', row_index))
-            elif combined == '01':
-                single_op_results[(col_index-1)/2].append(('U3', row_index))
-            elif combined == '10':
-                single_op_results[(col_index-1)/2].append(('data', row_index))
-            elif combined == '11':
-                single_op_results[(col_index-1)/2].append(('data+U3', row_index))
-            else:
-                pass
- 
-    # Translate enta to enta op_results
-    enta_op_results = {i: [] for i in range(len(enta[0]) - 1)}
-    for col_index in range(1, len(enta[0])):
-        for row_index in range(len(enta)):
-            control = row_index
-            target = enta[row_index][col_index] - 1
-            if control == target:
-                enta_op_results[col_index - 1].append(('Identity', target))
-            else:
-                if col_index - 1 in enta_op_results:
-                    enta_op_results[col_index - 1].append(('C(U3)', control, target))
- 
-    # Combine single and enta op_results
-    op_results = []
-    for layer in range(int(one_hot_gate_matrix.shape[0]/(n_qubits * 2))):
-        op_results.extend(single_op_results[layer])
-        op_results.extend(enta_op_results[layer]) 
- 
+            op_idx = layer_start + q
+            if op_idx < len(op_results):
+                gate_name, qubits = op_results[op_idx]
+                
+                # 根据门类型设置single矩阵
+                if gate_name == 'Identity':
+                    single[q].extend([0, 0])
+                elif gate_name == 'U3':
+                    single[q].extend([0, 1])
+                elif gate_name == 'data':
+                    single[q].extend([1, 0])
+                elif gate_name == 'data+U3':
+                    single[q].extend([1, 1])
+        
+        # 处理双量子门 (每层的后n_qubits个操作)
+        for q in range(n_qubits):
+            op_idx = layer_start + n_qubits + q
+            if op_idx < len(op_results):
+                gate_name, qubits = op_results[op_idx]
+                
+                if gate_name == 'C(U3)' and len(qubits) == 2:
+                    control, target = qubits
+                    enta[control].append(target + 1)  # +1因为enta使用1-based索引
+                else:
+                    # Identity或其他情况，目标设为自身
+                    enta[q].append(q + 1)
+    
     return single, enta, op_results
 
 def cir_to_matrix(x, y, arch_code, fold=1):
@@ -425,13 +449,13 @@ def compute_scaling_factor(x, decoder, snr_target, d):
                 J_i = torch.autograd.grad(y, x, grad_outputs=grad_outputs, retain_graph=True, create_graph=True)[0]
                 J.append(J_i)
             J = torch.stack(J, dim=1)  # Stack Jacobian components
-            
-            # Step 4: Compute ||J||_2^2 (Frobenius norm squared of the Jacobian)
+
+            # Step 4: Compute ||J||_F^2 (Frobenius norm squared of the Jacobian)
             J_norm_squared = torch.sum(J ** 2)
             
             # Step 5: Compute scaling factor c
             x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
-            c = torch.sqrt(y_norm_squared / (snr_target * d * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
+            c = torch.sqrt(y_norm_squared / (snr_target * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
         
             return c.item()
 
@@ -455,3 +479,64 @@ def arch_to_z(archs, arch_code_fold, encoder):
         encoder.eval()
         mu, logvar = encoder(ops, adj)
         return mu, logvar
+
+def generate_single_enta(gate_matrix, n_qubits):
+ 
+    # Transfer gate_matrix into one-hot format
+    gate_matrix = gate_matrix.squeeze(0).cpu().detach().numpy()
+    one_hot_gate_matrix = np.zeros_like(gate_matrix, dtype=int)
+    max_indices = np.argmax(gate_matrix, axis=1)
+    one_hot_gate_matrix[np.arange(gate_matrix.shape[0]), max_indices] = 1
+ 
+    # Generate single and enta
+    single = [[i + 1] for i in range(n_qubits)]
+    enta = [[i + 1] for i in range(n_qubits)]
+    single_list_info = [[0, 0], [0, 1], [1, 0], [1, 1]]
+    for n in range(0, len(gate_matrix), n_qubits * 2):
+        qubit_info = one_hot_gate_matrix[n:n+n_qubits, :-n_qubits]
+        adj_info = one_hot_gate_matrix[n+n_qubits:n+2*n_qubits, -n_qubits:]
+        for q in range(n_qubits):
+            single_res = np.sum(qubit_info[q] * np.array((0, 1, 2, 3)))
+            single[q].extend(single_list_info[single_res])
+            try:
+                enta[q].append(int(np.squeeze(np.argwhere(adj_info[q])))+1)
+            except:
+                enta[q].append(q+1)
+ 
+    # Translate single to single op_results
+    single_op_results = {i: [] for i in range(n_qubits)}
+    for col_index in range(1, len(single[0]), 2):
+        for row_index in range(len(single)):
+            value1 = single[row_index][col_index]
+            value2 = single[row_index][col_index + 1]
+            combined = f"{value1}{value2}"
+            if combined == '00':
+                single_op_results[(col_index-1)/2].append(('Identity', row_index))
+            elif combined == '01':
+                single_op_results[(col_index-1)/2].append(('U3', row_index))
+            elif combined == '10':
+                single_op_results[(col_index-1)/2].append(('data', row_index))
+            elif combined == '11':
+                single_op_results[(col_index-1)/2].append(('data+U3', row_index))
+            else:
+                pass
+ 
+    # Translate enta to enta op_results
+    enta_op_results = {i: [] for i in range(len(enta[0]) - 1)}
+    for col_index in range(1, len(enta[0])):
+        for row_index in range(len(enta)):
+            control = row_index
+            target = enta[row_index][col_index] - 1
+            if control == target:
+                enta_op_results[col_index - 1].append(('Identity', target))
+            else:
+                if col_index - 1 in enta_op_results:
+                    enta_op_results[col_index - 1].append(('C(U3)', control, target))
+ 
+    # Combine single and enta op_results
+    op_results = []
+    for layer in range(int(one_hot_gate_matrix.shape[0]/(n_qubits * 2))):
+        op_results.extend(single_op_results[layer])
+        op_results.extend(enta_op_results[layer]) 
+ 
+    return single, enta, op_results

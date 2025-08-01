@@ -5,12 +5,14 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from sklearn.metrics import accuracy_score, f1_score
-from datasets import MNISTDataLoaders, MOSIDataLoaders, qml_Dataloaders
+from datasets import MNISTDataLoaders, qml_Dataloaders
 from FusionModel import QNet
-from FusionModel import translator
+from FusionModel import translator, single_enta_to_design
 
 from Arguments import Arguments
 import random
+
+
 
 
 def get_param_num(model):
@@ -157,7 +159,7 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
               'best_val_loss': best_val_loss, 'mae': metrics}
     
     if save:
-        torch.save(best_model.state_dict(), 'weights/init_weight')
+        torch.save(best_model.state_dict(), 'init_weights/init_weight')
     return best_model, report
 
 def pretrain(design, task, weight):    
@@ -179,21 +181,21 @@ def pretrain(design, task, weight):
 
 
 if __name__ == '__main__':
-    task = {
-    'task': 'MNIST_10',
-    'option': 'mix_reg',
-    'n_qubits': 10,
-    'n_layers': 4,
-    'fold': 2
-    }
-
     # task = {
-    # 'task': 'MNIST_4',
+    # 'task': 'MNIST_10',
     # 'option': 'mix_reg',
-    # 'n_qubits': 4,
+    # 'n_qubits': 10,
     # 'n_layers': 4,
-    # 'fold': 1
+    # 'fold': 2
     # }
+
+    task = {
+    'task': 'MNIST_4',
+    'option': 'mix_reg',
+    'n_qubits': 4,
+    'n_layers': 4,
+    'fold': 1
+    }
     
     arch_code = [task['n_qubits'], task['n_layers']]
     args = Arguments(**task)
@@ -202,9 +204,11 @@ if __name__ == '__main__':
     single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
     enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]    
     
-    design = translator(single, enta, 'full', arch_code, args.fold)
-    
-    best_model, report = Scheme(design, task, 'init', 1)
+    # design = translator(single, enta, 'full', arch_code, args.fold)
+    # design = op_list_to_design(op_list, arch_code)
+    design = single_enta_to_design(single, enta, arch_code)
+
+    best_model, report = Scheme(design, task, 'init', 30, verbs=False, save=True)
     
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')
