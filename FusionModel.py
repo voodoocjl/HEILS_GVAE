@@ -71,7 +71,7 @@ def translator(single_code, enta_code, trainable, arch_code, fold=1):
     updated_design['total_gates'] = updated_design['n_layers'] * n_qubits * 2
     return updated_design
 
-def single_enta_to_design(single, enta, arch_code_fold):
+def single_enta_to_design(single, enta, arch_code, fold=1):
     """
     Generate a design list usable by QNET from single and enta codes
 
@@ -86,7 +86,10 @@ def single_enta_to_design(single, enta, arch_code_fold):
         design: List containing quantum circuit design info, each element is (gate_type, [wire_indices], layer)
     """
     design = []
-    n_qubits, n_layers = arch_code_fold
+    single = qubit_fold(single, 0, fold)
+    enta = qubit_fold(enta, 1, fold)
+
+    n_qubits, n_layers = arch_code
 
     # Process each layer
     for layer in range(n_layers):
@@ -274,7 +277,7 @@ class TQLayer(tq.QuantumModule):
 
     def forward(self, x):
         bsz = x.shape[0]
-        kernel_size = 6
+        kernel_size = self.args.kernel
         x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
         if kernel_size == 4:
             x = x.view(bsz, 6, 6)

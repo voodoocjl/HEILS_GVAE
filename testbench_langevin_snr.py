@@ -12,6 +12,14 @@ from GVAE_PRE.utils import get_proj_mask, is_valid_ops_adj, generate_single_enta
 from GVAE_model import GVAE
 from configs import configs
 
+# Set global random seed for reproducibility
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+
 
 def op_list_to_design(op_list, arch_code_fold):
     """
@@ -102,6 +110,27 @@ def single_enta_to_design(single, enta, arch_code_fold):
     
     return design
 
+def sample_normal(mu, logvar, step_size, arch_code_fold):
+    """
+    Sample from N(mu, exp(logvar)) using the reparameterization trick.   
+    """
+    std = torch.exp(logvar)
+    eps = torch.randn_like(std)
+
+    n_qubits, n_layers = arch_code_fold
+    step_single, step_enta = step_size
+    # Adjust the step size for single and enta
+    step_size = [step_single] * n_qubits + [step_enta] * n_qubits
+    step_size = step_size * n_layers
+    step_size = torch.Tensor(np.diag(step_size))
+    # return mu + eps * std * step_size
+    return mu + torch.matmul(step_size, eps)
+
+def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
+    single_diff = sum(abs(np.array(a) - np.array(b)).sum() for a, b in zip(original_single, decoded_single))                    
+    enta_diff = sum((abs(np.array(a) - np.array(b)) != 0).sum() for a, b in zip(original_enta, decoded_enta))
+
+    return [single_diff, enta_diff]
 
 def Langevin_update(x, model, snr=10, step_size=0.01):
         
@@ -127,29 +156,13 @@ def Langevin_update(x, model, snr=10, step_size=0.01):
             x_new = decoder(x_new)
             mask = get_proj_mask(x_new[0], n_qubit, n_qubit)
             if is_valid_ops_adj(x_new[0], n_qubit, threshold=6):
-                # gate_matrix = x_new[0] + mask
-                gate_matrix = x_new[0]
+                gate_matrix = x_new[0] + mask
+                # gate_matrix = x_new[0]
                 single,enta, op_list = generate_single_enta_op(gate_matrix, n_qubit)
                 if [single, enta, op_list] not in x_valid_list:
                     x_valid_list.append([single, enta, op_list])
         print('Number of valid circuits:', len(x_valid_list))
         return x_valid_list
-
-def sample_normal(mu, logvar, step_size, arch_code_fold):
-    """
-    Sample from N(mu, exp(logvar)) using the reparameterization trick.   
-    """
-    std = torch.exp(logvar)
-    eps = torch.randn_like(std)
-
-    n_qubits, n_layers = arch_code_fold
-    step_single, step_enta = step_size
-    # Adjust the step size for single and enta
-    step_size = [step_single] * n_qubits + [step_enta] * n_qubits
-    step_size = step_size * n_layers
-    step_size = torch.Tensor(np.diag(step_size))
-    # return mu + eps * std * step_size
-    return mu + torch.matmul(step_size, eps)
 
 def evaluate_langevin_neighborhood(arch, snr_values, task):
     results = {}
@@ -196,14 +209,7 @@ def evaluate_langevin_neighborhood(arch, snr_values, task):
             'mean_diff': mean_diff, 
             'std_diff': std_diff
         }
-    return results
-
-def difference_between_archs(original_single, original_enta, decoded_single, decoded_enta):
-    single_diff = sum(abs(np.array(a) - np.array(b)).sum() for a, b in zip(original_single, decoded_single))                    
-    enta_diff = sum((abs(np.array(a) - np.array(b)) != 0).sum() for a, b in zip(original_enta, decoded_enta))
-
-    return [single_diff, enta_diff]
-                
+    return results                
 
 
 if __name__ == "__main__":

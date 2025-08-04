@@ -181,32 +181,36 @@ def pretrain(design, task, weight):
 
 
 if __name__ == '__main__':
-    # task = {
-    # 'task': 'MNIST_10',
-    # 'option': 'mix_reg',
-    # 'n_qubits': 10,
-    # 'n_layers': 4,
-    # 'fold': 2
-    # }
-
     task = {
-    'task': 'MNIST_4',
+    'task': 'MNIST_10',
     'option': 'mix_reg',
-    'n_qubits': 4,
+    'n_qubits': 10,
     'n_layers': 4,
-    'fold': 1
+    'fold': 2
     }
+
+    # task = {
+    # 'task': 'MNIST_4',
+    # 'option': 'mix_reg',
+    # 'n_qubits': 4,
+    # 'n_layers': 4,
+    # 'fold': 1
+    # }
     
     arch_code = [task['n_qubits'], task['n_layers']]
     args = Arguments(**task)
     n_layers = arch_code[1]
     n_qubits = int(arch_code[0] / args.fold)
     single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
-    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]    
+    enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
+
+    single = [[5, 1, 1, 0, 0, 0, 0, 0, 1], [1, 0, 1, 1, 1, 0, 0, 0, 1], [2, 0, 1, 1, 1, 1, 1, 0, 1], [3, 0, 1, 1, 1, 1, 1, 1, 1], [4, 0, 1, 1, 1, 0, 1, 1, 1]]
+    enta =  [[1, 2, 2, 3, 2], [2, 1, 3, 3, 5], [3, 2, 2, 1, 4], [4, 1, 1, 2, 2], [5, 1, 2, 4, 4]]
+
     
     # design = translator(single, enta, 'full', arch_code, args.fold)
     # design = op_list_to_design(op_list, arch_code)
-    design = single_enta_to_design(single, enta, arch_code)
+    design = single_enta_to_design(single, enta, arch_code, args.fold)
 
     best_model, report = Scheme(design, task, 'init', 30, verbs=False, save=True)
     
