@@ -130,9 +130,9 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     train_loss_list, val_loss_list = [], []
     best_val_loss = 0
     start = time.time()
+    best_model = model
     if epochs == 0:
-        print('No training epochs specified, skipping training.')
-        best_model = model
+        print('No training epochs specified, skipping training.')        
     else:        
         for epoch in range(epochs):
             try:
@@ -159,7 +159,7 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
               'best_val_loss': best_val_loss, 'mae': metrics}
     
     if save:
-        torch.save(best_model.state_dict(), 'init_weights/init_weight')
+        torch.save(best_model.state_dict(), 'init_weights/init_weight_' + task['task'])
     return best_model, report
 
 def pretrain(design, task, weight):    

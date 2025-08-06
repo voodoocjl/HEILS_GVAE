@@ -52,5 +52,16 @@ class Arguments:
             self.file_single = 'search_space/search_space_mnist_half_single'
             self.file_enta   = 'search_space/search_space_mnist_half_enta'
             self.fold        = fold
-            self.init_weight = 'init_weight_' + task
+
+        if task.startswith('QML'):            
+            self.batch_size = 32
+            self.task_name = task
+            
+            # Set path based on task content
+            if 'Hidden' in task:
+                self.path = 'hidden_manifold'
+            elif 'Linear' in task:
+                self.path = 'linearly_separable'
+            else:
+                self.path = None  # or set a default path
             

@@ -101,7 +101,7 @@ class Classifier:
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        if arch_code[0] == 4:
+        if int(arch_code[0]//self.fold) == 4:
             checkpoint = torch.load('pretrained/model-circuits_4_qubits-19.pt', map_location=self.device, weights_only=True)
         elif arch_code[0] == 10:
             checkpoint = torch.load('pretrained/model-circuits_5_qubits-15.pt', map_location=self.device, weights_only=True)

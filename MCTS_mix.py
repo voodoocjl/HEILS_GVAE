@@ -8,7 +8,7 @@ from sympy import true
 from Node import Node, Color
 from prepare import *
 from schemes import Scheme, Scheme_eval
-from FusionModel import translator
+from FusionModel import single_enta_to_design
 import datetime
 from FusionModel import cir_to_matrix 
 import time
@@ -141,7 +141,7 @@ class MCTS:
 
         best_arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)
         # plot_2d_array(arch)
-        design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
+        design = single_enta_to_design(single, enta, self.ARCH_CODE, args.fold)
         model_weight = check_file_with_prefix('weights', 'weight_{}_'.format(self.ITERATION))
         if model_weight:            
             best_model, report = Scheme_eval(design, task, model_weight)
@@ -175,7 +175,10 @@ class MCTS:
         arch_last = single + enta
 
         samples = 20
-        with open(os.path.join('search_space', f'search_space_mnist_{arch_code[0]}'), 'rb') as file:
+        search_space_path = os.path.join('search_space', f'search_space_mnist_{arch_code[0]}')
+        if not os.path.exists(search_space_path):
+            search_space_path = os.path.join('search_space', f'search_space_mnist_{arch_code_fold[0]}')
+        with open(search_space_path, 'rb') as file:
                 self.search_space = pickle.load(file)
         if args.strategy == 'mix':
             samples = 10 
@@ -306,7 +309,9 @@ class MCTS:
         original_single, original_enta, _ = generate_single_enta(gate_matrix, n_qubit)
         
         # snr_values = np.linspace([0.01, 0.01], [0.1, 0.1], n_trials)
-        snr_values = np.linspace([0.1, 0.01], [1, 0.5], n_trials)
+        # snr_values = np.linspace([0.1, 0.01], [1, 0.5], n_trials)
+        snr_values = np.linspace([0.01, 0.01], [0.1, 0.5], n_trials)
+
 
         snr_score_list = []
 
@@ -691,7 +696,7 @@ class MCTS:
 
                 diff = difference_between_archs(original_single, original_enta, single, enta)
                 difference.append(diff)
-            design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
+            design = single_enta_to_design(single, enta, self.ARCH_CODE, args.fold)
             arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)           
 
             jobs.append(job)
@@ -905,17 +910,17 @@ def create_agent(task, arch_code, pre_file, node=None):
         single = [[i]+[1]*2*n_layers for i in range(1,n_qubits+1)]
         enta = [[i]+[i+1]*n_layers for i in range(1,n_qubits)]+[[n_qubits]+[1]*n_layers]
 
-        with open('data/random_circuits_mnist_4.json', 'rb') as file:
-            circuits = json.load(file)
+        # with open('data/random_circuits_mnist_4.json', 'rb') as file:
+        #     circuits = json.load(file)
 
-        single = circuits[0]['single']
-        enta = circuits[0]['enta']
-        args.init_weight = 'random_circuits'
+        # single = circuits[0]['single']
+        # enta = circuits[0]['enta']
+        # args.init_weight = 'random_circuits'
         
         agent.explorations['single'] = single
         agent.explorations['enta'] = enta
         
-        design = translator(single, enta, 'full', arch_code, args.fold)
+        design = single_enta_to_design(single, enta, arch_code, args.fold)
                 
         if args.init_weight in init_weights:
             agent.weight = torch.load(os.path.join(init_weight_path, args.init_weight))
@@ -937,28 +942,50 @@ if __name__ == '__main__':
     np.random.seed(42)
     torch.random.manual_seed(42)
 
-    parser = argparse.ArgumentParser(description='Process some parameters.')
-    parser.add_argument('-task', type=str, required=False, default='MNIST', help='Task name, e.g., MNIST or MNIST-10')
+    parser = argparse.ArgumentParser(description='Process some parameters.')    
     parser.add_argument('-pretrain', type=str, required=False, default='no_pretrain', help='filename of pretraining weights, e.g. pre_weights')
+    import ast
+
+    parser.add_argument(
+        '-task',
+        type=ast.literal_eval,  # dict
+        required=False,
+        default="{'task': 'MNIST'}",
+        help="Task dict, e.g. \"{'task': 'QML_Linear_32d', 'n_qubits': 8, ...}\""
+    )
 
     args_c = parser.parse_args()
-    # task = args_c.task
+    task = args_c.task
     
+    task = {
+    'task': 'QML_Linear_32d',
+    'n_qubits': 8,
+    'n_layers': 4,
+    'fold': 2,
+    'option': 'mix_reg',
+    'regular': True,
+    'num_processes': 1
+    }
+
     # task = {
-    # 'task': 'QML_Linear_32d_mix_reg',
+    # 'task': 'QML_Hidden_32d',
     # 'n_qubits': 8,
     # 'n_layers': 4,
-    # 'fold': 2
+    # 'fold': 2,
+    # 'option': 'mix_reg',
+    # 'regular': True,
+    # 'num_processes': 2
     # }
 
-    task = {
-    'task': 'MNIST_4',
-    'option': 'mix_no_reg',
-    'regular': True,
-    'n_qubits': 4,
-    'n_layers': 4,
-    'fold': 1
-    }
+    # task = {
+    # 'task': 'MNIST_4',
+    # 'option': 'mix_no_reg',
+    # 'regular': True,
+    # 'n_qubits': 4,
+    # 'n_layers': 4,
+    # 'fold': 1,
+    # 'num_processes': 2
+    # }
 
     # task = {
     # 'task': 'MNIST_10',
@@ -966,14 +993,15 @@ if __name__ == '__main__':
     # 'regular': True,
     # 'n_qubits': 10,
     # 'n_layers': 4,
-    # 'fold': 2
+    # 'fold': 2,
+    # 'num_processes': 2
     # }
 
     mp.set_start_method('spawn')
 
     saved = None
     # saved = 'states/mcts_agent_20'
-    num_processes = 2             
+    num_processes = task.get('num_processes', 1)            
     
     check_file(task['task']+'_'+task['option'])
     

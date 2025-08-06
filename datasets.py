@@ -8,14 +8,6 @@ import pandas as pd
 from torch.utils.data.sampler import SequentialSampler, RandomSampler
 
 
-# Dataloaders= lambda args: myminist_cg(args, 3,5,8)
-# Dataloaders = lambda args: myBarsAndStripes(args, 4)
-# qml_Dataloaders = lambda args: myhidden_manifold(args,6,32)
-# Dataloaders = lambda args: myhyperplanes(args, 3, 10)
-qml_Dataloaders = lambda args: mylinearly_separable(args, 16)
-# Dataloaders = lambda args: mytwo_curves(args, 20)
-
-
 class CustomDataset(Dataset):
     def __init__(self, audio, visual, text, target):
         self.audio = audio
@@ -183,22 +175,22 @@ def create_dataloader(args,train,test):
         sampler=RandomSampler(test_dateset)
     )
     return train_loader, test_loader, test_loader
+
+def qml_Dataloaders(args):
+    train=pd.read_csv(f'benchmarks/{args.path}/{args.task_name}_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/{args.path}/{args.task_name}_test.csv',header=None)
+    return create_dataloader(args, train, test)
+
 def myBarsAndStripes(args,size):
     train=pd.read_csv(f'benchmarks/bars_and_stripes/bars_and_stripes_{size}_x_{size}_0.5noise_train.csv',header=None)
     test=pd.read_csv(f'benchmarks/bars_and_stripes/bars_and_stripes_{size}_x_{size}_0.5noise_test.csv',header=None)
     return create_dataloader(args,train,test)
-def myhidden_manifold(args,manifold_dimension,n_features):
-    train=pd.read_csv(f'benchmarks/hidden_manifold/hidden_manifold-{manifold_dimension}manifold-{n_features}d_train.csv',header=None)
-    test=pd.read_csv(f'benchmarks/hidden_manifold/hidden_manifold-{manifold_dimension}manifold-{n_features}d_test.csv',header=None)
-    return create_dataloader(args,train,test)
+
 def myhyperplanes(args,dim_hyperplanes,n_hyperplanes):
     train=pd.read_csv(f'benchmarks/hyperplanes_diff/hyperplanes-10d-from{dim_hyperplanes}d-{n_hyperplanes}n_train.csv',header=None)
     test=pd.read_csv(f'benchmarks/hyperplanes_diff/hyperplanes-10d-from{dim_hyperplanes}d-{n_hyperplanes}n_test.csv',header=None)
     return create_dataloader(args, train, test)
-def mylinearly_separable(args,n_features):
-    train=pd.read_csv(f'benchmarks/linearly_separable/linearly_separable_{n_features}d_train.csv',header=None)
-    test=pd.read_csv(f'benchmarks/linearly_separable/linearly_separable_{n_features}d_test.csv',header=None)
-    return create_dataloader(args, train, test)
+
 def myminist_cg(args,a,b,height):
     train=pd.read_csv(f'benchmarks/mnist_cg/mnist_pixels_{a}-{b}_{height}x{height}_train.csv',header=None)
     test=pd.read_csv(f'benchmarks/mnist_cg/mnist_pixels_{a}-{b}_{height}x{height}_test.csv',header=None)

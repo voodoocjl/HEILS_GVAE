@@ -277,14 +277,17 @@ class TQLayer(tq.QuantumModule):
 
     def forward(self, x):
         bsz = x.shape[0]
-        kernel_size = self.args.kernel
-        x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
-        if kernel_size == 4:
-            x = x.view(bsz, 6, 6)
-            tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
-            x = tmp.reshape(bsz, -1, 10).transpose(1, 2)
+        kernel_size = self.args.kernel        
+        if not self.args.task.startswith('QML'):
+            x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+            if kernel_size == 4:
+                x = x.view(bsz, 6, 6)
+                tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+                x = tmp.reshape(bsz, -1, 10).transpose(1, 2)
+            else:
+                x = x.view(bsz, 4, 4).transpose(1, 2)
         else:
-            x = x.view(bsz, 4, 4).transpose(1, 2)
+            x = x.view(bsz, self.n_wires, -1)
 
         qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
 
